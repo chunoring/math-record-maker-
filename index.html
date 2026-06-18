@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="prompt.css?v=20260618-2" />
   <link rel="stylesheet" href="guide.css" />
   <link rel="stylesheet" href="home.css?v=20260619-1" />
-  <link rel="stylesheet" href="backup.css" />
+  <link rel="stylesheet" href="backup.css?v=20260619-2" />
   <link rel="stylesheet" href="batch.css?v=20260619-5" />
 </head>
 <body>
@@ -23,7 +23,17 @@
         </div>
         <p class="hero-copy">평가를 먼저 설계하고, 학생별 관찰 기록을 근거 있는 세특 문장으로 정리하세요.</p>
       </div>
-      <div class="hero-mark" aria-hidden="true">∑</div>
+      <aside class="data-safety-panel" aria-label="전체 데이터 저장 및 복원">
+        <span>DATA SAFE</span>
+        <strong>내 소중한 세특이 날아갈까 걱정된다면?</strong>
+        <p>수행평가와 학급 입력 자료를 한 파일로 안전하게 보관하세요.</p>
+        <div class="backup-actions">
+          <button type="button" id="exportAllData" class="backup-button">↓ 전체 저장하기</button>
+          <button type="button" id="importAllData" class="backup-button">↑ 전체 불러오기</button>
+          <input type="file" id="fullBackupFileInput" accept="application/json,.json" hidden />
+        </div>
+        <small>학생 정보가 포함될 수 있으니 백업 파일을 안전하게 보관하세요.</small>
+      </aside>
     </header>
 
     <nav class="flow-nav" aria-label="작업 메뉴">
@@ -140,6 +150,12 @@
             <textarea id="assessmentActivity" rows="5" placeholder="학생이 수행할 과제, 탐구 과정, 산출물 등을 구체적으로 입력하세요." required></textarea>
           </label>
 
+          <label class="field">
+            <span>AI 프롬프트 강조사항 <small>선택</small></span>
+            <textarea id="assessmentPromptFocus" rows="3" maxlength="600" placeholder="예: 학생이 선택한 [주제] 항목을 중심으로 작성하고, 수행 결과보다 탐구 과정과 근거 제시 과정을 강조하세요."></textarea>
+            <small>이 수행평가의 개별·학급 AI 프롬프트에 공통으로 적용됩니다. 학생 자료에 근거가 있을 때만 반영합니다.</small>
+          </label>
+
           <fieldset class="content-fields-config">
             <legend>학생별 작성 항목</legend>
             <p>학생마다 입력할 내용을 구성하세요. 필수 항목은 고정되며, 선택 항목은 삭제하거나 새로 추가할 수 있습니다.</p>
@@ -170,13 +186,7 @@
         <aside class="card list-card">
           <div class="card-title list-card-title">
             <div class="list-title-text"><span class="card-icon">✓</span><h3>등록된 수행평가</h3></div>
-            <div class="backup-actions" aria-label="수행평가 백업">
-              <button type="button" id="exportAssessments" class="backup-button" title="등록된 수행평가를 파일로 저장">↓ 내보내기</button>
-              <button type="button" id="importAssessments" class="backup-button" title="백업 파일에서 수행평가 복원">↑ 불러오기</button>
-              <input type="file" id="backupFileInput" accept="application/json,.json" hidden />
-            </div>
           </div>
-          <p class="backup-note">백업 파일로 다른 컴퓨터에서도 복원할 수 있으며, 불러온 내용은 기존 목록과 안전하게 합쳐집니다.</p>
           <div id="assessmentList" class="assessment-list"></div>
         </aside>
       </div>
@@ -234,9 +244,9 @@
           <fieldset class="choice-field">
             <legend>분량 설정 <b>*</b> <small>입력 내용에 맞춰 요약·보완</small></legend>
             <div class="segment-grid three">
-              <label><input type="radio" name="length" value="short" /><span><strong>간결하게</strong><small>약 250~350자</small></span></label>
-              <label><input type="radio" name="length" value="medium" checked /><span><strong>보통</strong><small>약 400~550자</small></span></label>
-              <label><input type="radio" name="length" value="long" /><span><strong>상세하게</strong><small>약 600자 이상</small></span></label>
+              <label><input type="radio" name="length" value="short" /><span><strong>간결하게</strong><small>약 150자</small></span></label>
+              <label><input type="radio" name="length" value="medium" checked /><span><strong>보통</strong><small>약 250자</small></span></label>
+              <label><input type="radio" name="length" value="long" /><span><strong>상세하게</strong><small>약 450자</small></span></label>
             </div>
           </fieldset>
 
@@ -297,7 +307,7 @@
 
         <div id="batchEditorArea" class="hidden">
           <div class="batch-settings">
-            <label class="field"><span>학급 공통 희망 분량</span><select id="batchLength"><option value="short">간결하게 (약 250~350자)</option><option value="medium" selected>보통 (약 400~550자)</option><option value="long">상세하게 (약 600자 이상)</option></select></label>
+            <label class="field"><span>학급 공통 희망 분량</span><select id="batchLength"><option value="short">간결하게 (약 150자)</option><option value="medium" selected>보통 (약 250자)</option><option value="long">상세하게 (약 450자)</option></select></label>
             <div class="batch-privacy"><strong>첫 열은 교사용 번호·구분 칸입니다.</strong><p>기본값 1~5를 자유롭게 수정할 수 있으며, AI에는 이 값 대신 학생 01, 학생 02 같은 익명 번호만 복사됩니다.</p></div>
           </div>
 
@@ -393,6 +403,6 @@
 
   <div id="toast" class="toast" role="status"></div>
   <script src="standards.js"></script>
-  <script src="app.js?v=20260619-12"></script>
+  <script src="app.js?v=20260619-15"></script>
 </body>
 </html>

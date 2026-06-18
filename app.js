@@ -106,7 +106,7 @@ function loadAssessments() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
     return Array.isArray(saved)
-      ? saved.map(item => ({ ...item, optionalFields: normalizeOptionalFields(item) }))
+      ? saved.map(item => ({ ...item, promptFocus: normalizePromptFocus(item.promptFocus), optionalFields: normalizeOptionalFields(item) }))
       : [];
   }
   catch { return []; }
@@ -116,25 +116,39 @@ function saveAssessments() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(assessments));
 }
 
-function exportAssessmentBackup() {
-  if (!assessments.length) return showToast('내보낼 수행평가가 없습니다.');
-  const backup = {
+function createFullBackup() {
+  const assessmentIds = new Set(assessments.map(item => item.id));
+  const relatedBatchDrafts = Object.fromEntries(Object.entries(batchDrafts)
+    .filter(([assessmentId]) => assessmentIds.has(assessmentId)));
+  return {
     app: '수학 수행평가 세특 메이커',
-    version: 1,
+    version: 2,
+    type: 'full-backup',
     exportedAt: new Date().toISOString(),
-    assessments
+    assessments,
+    batchDrafts: relatedBatchDrafts
   };
+}
+
+function downloadBackupFile(backup, label = '전체백업') {
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const date = new Date().toLocaleDateString('sv-SE');
   link.href = url;
-  link.download = `세특메이커_수행평가백업_${date}.json`;
+  link.download = `세특메이커_${label}_${date}.json`;
   document.body.append(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
-  showToast(`${assessments.length}개의 수행평가를 백업했습니다.`);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportFullBackup() {
+  if (!assessments.length) return showToast('저장할 데이터가 없습니다.');
+  const backup = createFullBackup();
+  downloadBackupFile(backup);
+  const classCount = Object.values(backup.batchDrafts).filter(batchDraftHasContent).length;
+  showToast(`수행평가 ${assessments.length}개와 학급 자료 ${classCount}개를 저장했습니다.`);
 }
 
 function normalizeImportedAssessment(item) {
@@ -152,6 +166,7 @@ function normalizeImportedAssessment(item) {
     name,
     subject,
     activity,
+    promptFocus: normalizePromptFocus(item.promptFocus),
     optionalFields: normalizeOptionalFields(item),
     standards,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
@@ -183,9 +198,44 @@ function normalizeOptionalFields(item) {
   }).filter(Boolean);
 }
 
-async function importAssessmentBackup(file) {
+function normalizeImportedBatchDraft(draft, item) {
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return null;
+  const allowedFields = new Set(item.optionalFields.map(field => field.id));
+  const sourceRows = Array.isArray(draft.rows) ? draft.rows.slice(0, 40) : [];
+  const rows = sourceRows.map((row, index) => {
+    const normalized = normalizeBatchRow(row, index);
+    normalized.localLabel = normalized.localLabel.slice(0, 60);
+    normalized.evidence = normalized.evidence.slice(0, 5000);
+    normalized.optional = Object.fromEntries(Object.entries(normalized.optional)
+      .filter(([key, value]) => allowedFields.has(key) && typeof value === 'string')
+      .map(([key, value]) => [key, value.slice(0, 5000)]));
+    return normalized;
+  });
+  return {
+    length: ['short', 'medium', 'long'].includes(draft.length) ? draft.length : 'medium',
+    styleReference: typeof draft.styleReference === 'string' ? draft.styleReference.slice(0, 2000) : '',
+    rows: rows.length ? rows : Array.from({ length: 5 }, (_, index) => createBatchRow(index))
+  };
+}
+
+function batchDraftHasContent(draft) {
+  if (!draft || typeof draft !== 'object') return false;
+  if (typeof draft.styleReference === 'string' && draft.styleReference.trim()) return true;
+  return Array.isArray(draft.rows) && draft.rows.some((row, index) => {
+    const label = typeof row?.localLabel === 'string' ? row.localLabel.trim() : '';
+    const hasOptional = row?.optional && typeof row.optional === 'object'
+      && Object.values(row.optional).some(value => typeof value === 'string' && value.trim());
+    return (label && label !== String(index + 1))
+      || (typeof row?.evidence === 'string' && row.evidence.trim())
+      || hasOptional
+      || Boolean(row?.achievement)
+      || Boolean(normalizeBatchCompetencies(row?.competencies));
+  });
+}
+
+async function importFullBackup(file) {
   if (!file) return;
-  if (file.size > 2 * 1024 * 1024) return showToast('백업 파일은 2MB 이하만 불러올 수 있습니다.');
+  if (file.size > 10 * 1024 * 1024) return showToast('백업 파일은 10MB 이하만 불러올 수 있습니다.');
   try {
     const parsed = JSON.parse(await file.text());
     const source = Array.isArray(parsed) ? parsed : parsed?.assessments;
@@ -193,18 +243,34 @@ async function importAssessmentBackup(file) {
     const imported = source.map(normalizeImportedAssessment).filter(Boolean);
     if (!imported.length) throw new Error('empty-backup');
 
+    if (assessments.length || Object.values(batchDrafts).some(batchDraftHasContent)) {
+      downloadBackupFile(createFullBackup(), '불러오기전_안전백업');
+    }
     const merged = new Map(assessments.map(item => [item.id, item]));
     imported.forEach(item => merged.set(item.id, item));
     assessments = [...merged.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+
+    const importedDraftSource = parsed?.batchDrafts && typeof parsed.batchDrafts === 'object' && !Array.isArray(parsed.batchDrafts)
+      ? parsed.batchDrafts
+      : {};
+    let importedClassCount = 0;
+    imported.forEach(item => {
+      const normalizedDraft = normalizeImportedBatchDraft(importedDraftSource[item.id], item);
+      if (!normalizedDraft) return;
+      batchDrafts[item.id] = normalizedDraft;
+      if (batchDraftHasContent(normalizedDraft)) importedClassCount += 1;
+    });
     saveAssessments();
+    saveBatchDrafts();
     resetAssessmentForm();
     renderAssessmentList();
     renderAssessmentSelect(imported[0].id);
-    showToast(`${imported.length}개의 수행평가를 불러왔습니다.`);
+    renderBatchAssessmentSelect();
+    showToast(`수행평가 ${imported.length}개와 학급 자료 ${importedClassCount}개를 불러왔습니다.`);
   } catch {
-    showToast('올바른 수행평가 백업 파일이 아닙니다.');
+    showToast('올바른 전체 백업 파일이 아닙니다.');
   } finally {
-    $('#backupFileInput').value = '';
+    $('#fullBackupFileInput').value = '';
   }
 }
 
@@ -214,6 +280,12 @@ function makeId() {
 
 function clean(text) {
   return text.trim().replace(/\s+/g, ' ').replace(/[.!?。]+$/, '');
+}
+
+function normalizePromptFocus(value) {
+  return typeof value === 'string'
+    ? value.trim().replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').slice(0, 600)
+    : '';
 }
 
 function pick(list, offset = 0) {
@@ -346,6 +418,7 @@ $('#assessmentForm').addEventListener('submit', event => {
     name: clean($('#assessmentName').value),
     subject: $('#assessmentSubject').value,
     activity: clean($('#assessmentActivity').value),
+    promptFocus: normalizePromptFocus($('#assessmentPromptFocus').value),
     optionalFields,
     standards,
     updatedAt: new Date().toISOString()
@@ -372,9 +445,9 @@ function resetAssessmentForm() {
 }
 
 $('#cancelEdit').addEventListener('click', resetAssessmentForm);
-$('#exportAssessments').addEventListener('click', exportAssessmentBackup);
-$('#importAssessments').addEventListener('click', () => $('#backupFileInput').click());
-$('#backupFileInput').addEventListener('change', event => importAssessmentBackup(event.target.files[0]));
+$('#exportAllData').addEventListener('click', exportFullBackup);
+$('#importAllData').addEventListener('click', () => $('#fullBackupFileInput').click());
+$('#fullBackupFileInput').addEventListener('change', event => importFullBackup(event.target.files[0]));
 
 function editAssessment(id) {
   const item = assessments.find(assessment => assessment.id === id);
@@ -383,6 +456,7 @@ function editAssessment(id) {
   $('#assessmentName').value = item.name;
   $('#assessmentSubject').value = item.subject;
   $('#assessmentActivity').value = item.activity;
+  $('#assessmentPromptFocus').value = item.promptFocus || '';
   renderOptionalFieldConfig(item.optionalFields);
   $('#formTitle').textContent = '수행평가 수정';
   $('#saveButtonText').textContent = '수정 내용 저장하기';
@@ -791,9 +865,9 @@ function polishRecord(sentences) {
 
 function fitRecordLength(sentences, length, supportSentences = []) {
   const guide = {
-    short: { minimum: 230, maximum: 370 },
-    medium: { minimum: 380, maximum: 590 },
-    long: { minimum: 560, maximum: 850 }
+    short: { minimum: 130, maximum: 170 },
+    medium: { minimum: 220, maximum: 280 },
+    long: { minimum: 400, maximum: 500 }
   }[length];
   const polished = [...sentences, ...supportSentences].filter(Boolean).map(observableEnding).filter(Boolean);
   const selected = [];
@@ -934,7 +1008,7 @@ function buildStudentDataPrompt() {
   };
   const achievementNames = { excellent: '매우 우수', good: '우수', steady: '보통', growth: '성장 중' };
   const lengthGuide = {
-    short: '간결하게(약 250~350자)', medium: '보통(약 400~550자)', long: '상세하게(약 600자 이상)'
+    short: '간결하게(약 150자)', medium: '보통(약 250자)', long: '상세하게(약 450자)'
   };
   const selectedCompetencies = $$('#competencyChoices input:checked').map(input => competencyNames[input.value]);
   const achievement = $('input[name="achievement"]:checked').value;
@@ -1000,6 +1074,7 @@ function buildAssessmentPrompt() {
     const standard = ACHIEVEMENT_STANDARDS[item.subject]?.find(entry => entry.code === code);
     return standard ? `[${standard.code}] ${standard.text}` : '';
   }).filter(Boolean).join('\n');
+  const promptFocus = buildPromptFocusSection(item);
 
   return `${buildCommonPrompt()}
 
@@ -1010,6 +1085,7 @@ function buildAssessmentPrompt() {
 - 학생별 필수 작성 항목: 학생 관찰 근거(학생 활동 내용)
 - 학생별 선택 작성 항목: ${item.optionalFields.map(field => field.label).join(', ') || '없음'}
 
+${promptFocus}
 # 성취기준 — 해석을 위한 내부 참고용
 ${standards || '등록된 성취기준 없음'}
 
@@ -1021,6 +1097,13 @@ ${standards || '등록된 성취기준 없음'}
 5. 다른 수행평가로 넘어갈 때는 새 대화방에서 해당 평가의 전용 프롬프트를 다시 입력해야 합니다.
 
 위 지침과 수행평가 맥락을 이해했다면 지금은 “준비되었습니다. 이 수행평가의 학생별 원본 자료를 보내주세요.”라고만 답하세요.`;
+}
+
+function buildPromptFocusSection(item) {
+  const focus = normalizePromptFocus(item?.promptFocus);
+  return focus
+    ? `# 교사가 지정한 강조사항\n${focus}\n\n위 강조사항은 학생별 원본 자료에서 확인되는 내용에만 적용하고, 강조를 위해 입력에 없는 사실을 만들지 마세요.\n`
+    : '';
 }
 
 $('#copyAssessmentPrompt').addEventListener('click', async () => {
@@ -1543,7 +1626,7 @@ function generateBatchOfflineDrafts() {
 
 function buildBatchPrompt(item, entries, draft) {
   const achievementNames = { excellent: '매우 우수', good: '우수', steady: '보통', growth: '성장 중' };
-  const lengthNames = { short: '약 250~350자', medium: '약 400~550자', long: '약 600자 이상' };
+  const lengthNames = { short: '약 150자', medium: '약 250자', long: '약 450자' };
   const standards = item.standards.map(code => {
     const standard = ACHIEVEMENT_STANDARDS[item.subject]?.find(entry => entry.code === code);
     return standard ? `[${standard.code}] ${standard.text}` : '';
@@ -1556,9 +1639,10 @@ function buildBatchPrompt(item, entries, draft) {
     return `## 학생 ${String(studentNumber).padStart(2, '0')}\n- 학생 관찰 근거(학생 활동 내용): ${row.evidence.trim()}\n${optionalLines ? `${optionalLines}\n` : ''}- 성취 수준: ${achievementNames[row.achievement] || '선택하지 않음'}\n- 강조할 수학 역량: ${row.competencies.trim() || '선택하지 않음'}\n- 희망 분량: ${lengthNames[draft.length]}`;
   }).join('\n\n');
   const outputLabels = entries.map(({ studentNumber }) => `[학생 ${String(studentNumber).padStart(2, '0')}]\n(완성된 세특 한 문단)`).join('\n\n');
-  const styleReference = draft.styleReference.trim()
+  const styleReferenceContent = draft.styleReference.trim()
     ? `# 문체 기준 잠금\n아래 문장은 문장 길이, 어조, 구성만 참고하는 예시입니다. 예시 속 학생의 행동·성과·주제·수치 등 내용은 이번 학생들에게 절대 옮기지 마세요.\n\n${draft.styleReference.trim()}\n`
     : `# 문체 기준 잠금\n모든 학생에게 품격 있는 교사 관찰 문체, 현재형 명사형 종결(~함·~음·~임), 비슷한 문장 밀도와 완성도를 일관되게 적용하세요.\n`;
+  const styleReference = `${buildPromptFocusSection(item)}${styleReferenceContent}`;
 
   return `# 역할\n한국 고등학교에서 30년간 근무한 베테랑 수학교사처럼 아래 학생별 원본 자료를 바탕으로 교과세부능력 및 특기사항을 작성하세요.\n\n# 수행평가 공통 정보\n- 과목: ${item.subject}\n- 수행평가명: ${item.name}\n- 수행평가 활동: ${item.activity}\n\n# 성취기준 — 내부 참고용\n${standards || '등록된 성취기준 없음'}\n\n${buildWritingGuide()}\n\n${styleReference}\n# 학급 일괄 작성 추가 규칙\n1. 각 학생을 서로 완전히 독립된 기록으로 처리하고 다른 학생의 행동·평가·주제를 섞지 마세요.\n2. 앞 학생과 뒤 학생의 글자 수, 문장 밀도, 문체 완성도를 같은 기준으로 유지하세요. 뒤쪽 학생을 더 짧게 쓰거나 형식을 생략하지 마세요.\n3. 문체 기준 예시는 문장 길이·어조·구성만 참고하고, 예시 속 학생의 행동·성과·주제·수치 등 내용은 옮기지 마세요.\n4. 설명, 제목, 작성 이유 없이 학생별 완성 문단만 출력하세요.\n\n# 학생별 원본 자료\n${studentBlocks}\n\n# 출력 형식\n아래 번호와 순서를 정확히 지키고 모든 학생을 빠짐없이 출력하세요.\n\n${outputLabels}\n\n출력 전에 사실 추가 여부, 학생 간 정보 혼합, 뒤쪽 학생 분량 축소, 금지 주어, 관찰 불가능한 표현, 종결 어미, 성취기준 노출, 문체 변화, 형식 누락이 없는지 점검하세요.`;
 }
