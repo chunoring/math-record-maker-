@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="prompt.css?v=20260618-2" />
   <link rel="stylesheet" href="guide.css" />
   <link rel="stylesheet" href="home.css?v=20260619-1" />
-  <link rel="stylesheet" href="backup.css?v=20260619-2" />
+  <link rel="stylesheet" href="backup.css?v=20260619-3" />
   <link rel="stylesheet" href="batch.css?v=20260619-5" />
 </head>
 <body>
@@ -30,9 +30,11 @@
         <div class="backup-actions">
           <button type="button" id="exportAllData" class="backup-button">↓ 전체 저장하기</button>
           <button type="button" id="importAllData" class="backup-button">↑ 전체 불러오기</button>
+          <button type="button" id="recoverPreviousData" class="backup-button recovery-button">↶ 이전 데이터 복구</button>
           <input type="file" id="fullBackupFileInput" accept="application/json,.json" hidden />
         </div>
-        <small>학생 정보가 포함될 수 있으니 백업 파일을 안전하게 보관하세요.</small>
+        <small id="dataSafetyStatus">자동 복구 상태를 확인하는 중입니다.</small>
+        <small>학생 정보가 포함될 수 있으니 내려받은 파일을 안전하게 보관하세요.</small>
       </aside>
     </header>
 
@@ -404,6 +406,6 @@
 
   <div id="toast" class="toast" role="status"></div>
   <script src="standards.js"></script>
-  <script src="app.js?v=20260619-16"></script>
+  <script src="app.js?v=20260619-17"></script>
 </body>
 </html>

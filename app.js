@@ -1,5 +1,7 @@
 const STORAGE_KEY = 'math-assessments-v2';
 const BATCH_STORAGE_KEY = 'math-batch-drafts-v1';
+const RECOVERY_STORAGE_KEY = 'math-record-maker-recovery-v1';
+const MAX_RECOVERY_SNAPSHOTS = 3;
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const DEFAULT_OPTIONAL_FIELDS = [
@@ -99,22 +101,70 @@ const veteranLevelText = {
   ]
 };
 
+let assessmentLoadIssue = '';
+let lastRecoverySnapshotAt = 0;
 let assessments = loadAssessments();
 let batchDrafts = loadBatchDrafts();
 let variant = 0;
 
 function loadAssessments() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return [];
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    return Array.isArray(saved)
-      ? saved.map(item => ({ ...item, promptFocus: normalizePromptFocus(item.promptFocus), optionalFields: normalizeOptionalFields(item) }))
-      : [];
+    const saved = JSON.parse(raw);
+    if (!Array.isArray(saved)) throw new Error('not-array');
+    const loaded = [];
+    saved.forEach((item, index) => {
+      try {
+        if (!item || typeof item !== 'object') throw new Error('invalid-item');
+        loaded.push({ ...item, promptFocus: normalizePromptFocus(item.promptFocus), optionalFields: normalizeOptionalFields(item) });
+      } catch {
+        assessmentLoadIssue = `저장된 수행평가 ${index + 1}번 항목을 읽지 못했습니다.`;
+      }
+    });
+    if (saved.length && !loaded.length) assessmentLoadIssue = '저장된 수행평가를 읽지 못해 원본 보호 모드로 전환했습니다.';
+    return loaded;
   }
-  catch { return []; }
+  catch {
+    assessmentLoadIssue = '저장 데이터를 해석하지 못해 원본 보호 모드로 전환했습니다.';
+    return [];
+  }
 }
 
-function saveAssessments() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(assessments));
+function storedAssessmentCount() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(saved) ? saved.length : 0;
+  } catch {
+    return -1;
+  }
+}
+
+function saveAssessments({ force = false, allowDecrease = false } = {}) {
+  const previousCount = storedAssessmentCount();
+  if (!force && (assessmentLoadIssue || previousCount < 0)) {
+    createRecoverySnapshot('저장 오류 감지 전 원본 보관', true);
+    showToast('기존 데이터 보호를 위해 저장을 중단했습니다. 이전 데이터 복구를 이용해 주세요.');
+    updateDataSafetyStatus();
+    return false;
+  }
+  if (!force && !allowDecrease && previousCount > assessments.length) {
+    createRecoverySnapshot('수행평가 수 감소 감지', true);
+    showToast('수행평가 수가 갑자기 줄어 저장을 중단했습니다. 이전 데이터 복구를 확인해 주세요.');
+    updateDataSafetyStatus();
+    return false;
+  }
+  createRecoverySnapshot('수행평가 저장 전 자동 보관', true);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(assessments));
+    assessmentLoadIssue = '';
+    updateDataSafetyStatus();
+    return true;
+  } catch {
+    showToast('저장 공간이 부족해 수행평가를 저장하지 못했습니다. 전체 저장하기로 백업해 주세요.');
+    updateDataSafetyStatus();
+    return false;
+  }
 }
 
 function createFullBackup() {
@@ -142,6 +192,107 @@ function downloadBackupFile(backup, label = '전체백업') {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function readRecoverySnapshots() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RECOVERY_STORAGE_KEY) || '[]');
+    return Array.isArray(saved) ? saved.filter(snapshot => snapshot && typeof snapshot === 'object') : [];
+  } catch {
+    return [];
+  }
+}
+
+function createRecoverySnapshot(reason, force = false) {
+  const now = Date.now();
+  if (!force && now - lastRecoverySnapshotAt < 60000) return false;
+  const assessmentsRaw = localStorage.getItem(STORAGE_KEY);
+  const batchDraftsRaw = localStorage.getItem(BATCH_STORAGE_KEY);
+  if (!assessmentsRaw && !batchDraftsRaw) return false;
+
+  const snapshots = readRecoverySnapshots();
+  const latest = snapshots[0];
+  if (latest?.assessmentsRaw === (assessmentsRaw || '[]') && latest?.batchDraftsRaw === (batchDraftsRaw || '{}')) {
+    lastRecoverySnapshotAt = now;
+    return false;
+  }
+
+  const snapshot = {
+    savedAt: new Date(now).toISOString(),
+    reason,
+    assessmentsRaw: assessmentsRaw || '[]',
+    batchDraftsRaw: batchDraftsRaw || '{}'
+  };
+  const next = [snapshot, ...snapshots].slice(0, MAX_RECOVERY_SNAPSHOTS);
+  try {
+    localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(next));
+    lastRecoverySnapshotAt = now;
+    return true;
+  } catch {
+    try {
+      localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify([{ ...snapshot, batchDraftsRaw: '{}' }]));
+      lastRecoverySnapshotAt = now;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function recoverySnapshotCounts(snapshot) {
+  let assessmentCount = 0;
+  let classCount = 0;
+  try {
+    const savedAssessments = JSON.parse(snapshot.assessmentsRaw || '[]');
+    assessmentCount = Array.isArray(savedAssessments) ? savedAssessments.length : 0;
+  } catch { /* 원본 문자열은 복구본에 그대로 유지 */ }
+  try {
+    const savedDrafts = JSON.parse(snapshot.batchDraftsRaw || '{}');
+    classCount = savedDrafts && typeof savedDrafts === 'object' && !Array.isArray(savedDrafts)
+      ? Object.values(savedDrafts).filter(batchDraftHasContent).length
+      : 0;
+  } catch { /* 원본 문자열은 복구본에 그대로 유지 */ }
+  return { assessmentCount, classCount };
+}
+
+function updateDataSafetyStatus() {
+  const status = $('#dataSafetyStatus');
+  const panel = $('.data-safety-panel');
+  if (!status || !panel) return;
+  panel.classList.toggle('safety-warning', Boolean(assessmentLoadIssue));
+  if (assessmentLoadIssue) {
+    status.textContent = `${assessmentLoadIssue} 새로 저장하지 말고 ‘이전 데이터 복구’를 눌러 주세요.`;
+    return;
+  }
+  const latest = readRecoverySnapshots()[0];
+  status.textContent = latest
+    ? `자동 복구본 보관됨 · ${new Date(latest.savedAt).toLocaleString('ko-KR')}`
+    : '현재 데이터를 자동 복구본으로 안전하게 보관합니다.';
+}
+
+function recoverPreviousData() {
+  const currentAssessmentsRaw = localStorage.getItem(STORAGE_KEY) || '[]';
+  const currentBatchRaw = localStorage.getItem(BATCH_STORAGE_KEY) || '{}';
+  const candidate = readRecoverySnapshots().find(snapshot => snapshot.assessmentsRaw !== currentAssessmentsRaw
+    || snapshot.batchDraftsRaw !== currentBatchRaw);
+  if (!candidate) return showToast('복구할 이전 데이터가 없습니다.');
+
+  const { assessmentCount, classCount } = recoverySnapshotCounts(candidate);
+  const savedAt = new Date(candidate.savedAt).toLocaleString('ko-KR');
+  if (!confirm(`${savedAt} 복구본으로 되돌릴까요?\n수행평가 ${assessmentCount}개 · 학급 자료 ${classCount}개\n현재 데이터는 먼저 긴급 백업 파일로 저장됩니다.`)) return;
+
+  downloadBackupFile({
+    ...createFullBackup(),
+    type: 'pre-recovery-emergency-backup',
+    rawStorage: { assessmentsRaw: currentAssessmentsRaw, batchDraftsRaw: currentBatchRaw }
+  }, '복구전_긴급백업');
+  try {
+    localStorage.setItem(STORAGE_KEY, candidate.assessmentsRaw || '[]');
+    localStorage.setItem(BATCH_STORAGE_KEY, candidate.batchDraftsRaw || '{}');
+    window.location.reload();
+  } catch {
+    showToast('복구 데이터를 저장할 공간이 부족합니다. 내려받은 긴급 백업 파일을 보관해 주세요.');
+  }
 }
 
 function exportFullBackup() {
@@ -261,8 +412,8 @@ async function importFullBackup(file) {
       batchDrafts[item.id] = normalizedDraft;
       if (batchDraftHasContent(normalizedDraft)) importedClassCount += 1;
     });
-    saveAssessments();
-    saveBatchDrafts();
+    saveAssessments({ force: true });
+    saveBatchDrafts({ skipSnapshot: true });
     resetAssessmentForm();
     renderAssessmentList();
     renderAssessmentSelect(imported[0].id);
@@ -428,10 +579,15 @@ $('#assessmentForm').addEventListener('submit', event => {
     updatedAt: new Date().toISOString()
   };
 
+  const previousAssessments = assessments;
   const index = assessments.findIndex(item => item.id === data.id);
-  if (index >= 0) assessments[index] = data;
-  else assessments.unshift(data);
-  saveAssessments();
+  assessments = index >= 0
+    ? assessments.map(item => item.id === data.id ? data : item)
+    : [data, ...assessments];
+  if (!saveAssessments()) {
+    assessments = previousAssessments;
+    return;
+  }
   resetAssessmentForm();
   renderAssessmentList();
   renderAssessmentSelect(data.id);
@@ -449,9 +605,10 @@ function resetAssessmentForm() {
 }
 
 $('#cancelEdit').addEventListener('click', resetAssessmentForm);
-$('#exportAllData').addEventListener('click', exportFullBackup);
-$('#importAllData').addEventListener('click', () => $('#fullBackupFileInput').click());
-$('#fullBackupFileInput').addEventListener('change', event => importFullBackup(event.target.files[0]));
+$('#exportAllData')?.addEventListener('click', exportFullBackup);
+$('#importAllData')?.addEventListener('click', () => $('#fullBackupFileInput')?.click());
+$('#fullBackupFileInput')?.addEventListener('change', event => importFullBackup(event.target.files[0]));
+$('#recoverPreviousData')?.addEventListener('click', recoverPreviousData);
 
 function editAssessment(id) {
   const item = assessments.find(assessment => assessment.id === id);
@@ -472,8 +629,12 @@ function editAssessment(id) {
 function deleteAssessment(id) {
   const item = assessments.find(assessment => assessment.id === id);
   if (!item || !confirm(`‘${item.name}’ 수행평가를 삭제할까요?`)) return;
+  const previousAssessments = assessments;
   assessments = assessments.filter(assessment => assessment.id !== id);
-  saveAssessments();
+  if (!saveAssessments({ allowDecrease: true })) {
+    assessments = previousAssessments;
+    return;
+  }
   renderAssessmentList();
   renderAssessmentSelect();
   showToast('수행평가를 삭제했습니다.');
@@ -1139,11 +1300,15 @@ function loadBatchDrafts() {
   }
 }
 
-function saveBatchDrafts() {
+function saveBatchDrafts({ skipSnapshot = false } = {}) {
   try {
+    if (!skipSnapshot) createRecoverySnapshot('학급 자료 저장 전 자동 보관');
     localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batchDrafts));
+    updateDataSafetyStatus();
+    return true;
   } catch {
     showToast('학급 입력 내용을 저장할 공간이 부족합니다.');
+    return false;
   }
 }
 
@@ -1763,3 +1928,7 @@ renderAssessmentSelect();
 renderBatchAssessmentSelect();
 renderOptionalFieldConfig();
 renderStandards('');
+window.setTimeout(() => {
+  createRecoverySnapshot('앱 시작 시 자동 보관', true);
+  updateDataSafetyStatus();
+}, 0);
