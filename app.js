@@ -1,6 +1,18 @@
 const STORAGE_KEY = 'math-assessments-v2';
+const BATCH_STORAGE_KEY = 'math-batch-drafts-v1';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const DEFAULT_OPTIONAL_FIELDS = [
+  { id: 'career', type: 'career', label: '학생의 진로' },
+  { id: 'teacher', type: 'teacher', label: '교사의 평가' }
+];
+const BATCH_COMPETENCIES = [
+  { key: 'problem', label: '문제해결 역량', matches: ['문제해결', 'problem'] },
+  { key: 'reasoning', label: '추론 역량', matches: ['추론', 'reasoning'] },
+  { key: 'communication', label: '의사소통 역량', matches: ['의사소통', 'communication'] },
+  { key: 'connection', label: '연결 역량', matches: ['연결', 'connection'] },
+  { key: 'information', label: '정보처리 역량', matches: ['정보처리', 'information'] }
+];
 
 const competencyText = {
   problem: [
@@ -87,10 +99,16 @@ const veteranLevelText = {
 };
 
 let assessments = loadAssessments();
+let batchDrafts = loadBatchDrafts();
 let variant = 0;
 
 function loadAssessments() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    return Array.isArray(saved)
+      ? saved.map(item => ({ ...item, optionalFields: normalizeOptionalFields(item) }))
+      : [];
+  }
   catch { return []; }
 }
 
@@ -134,9 +152,35 @@ function normalizeImportedAssessment(item) {
     name,
     subject,
     activity,
+    optionalFields: normalizeOptionalFields(item),
     standards,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
   };
+}
+
+function defaultOptionalFields() {
+  return DEFAULT_OPTIONAL_FIELDS.map(field => ({ ...field }));
+}
+
+function normalizeOptionalFields(item) {
+  if (!Array.isArray(item?.optionalFields)) {
+    const fields = defaultOptionalFields();
+    const legacyLabel = typeof item?.customFieldLabel === 'string' ? clean(item.customFieldLabel).slice(0, 40) : '';
+    if (legacyLabel) fields.push({ id: makeId(), type: 'custom', label: legacyLabel });
+    return fields;
+  }
+
+  const usedIds = new Set();
+  return item.optionalFields.slice(0, 10).map(field => {
+    if (!field || typeof field !== 'object') return null;
+    const label = typeof field.label === 'string' ? clean(field.label).slice(0, 40) : '';
+    if (!label) return null;
+    const type = ['career', 'teacher', 'custom'].includes(field.type) ? field.type : 'custom';
+    let id = typeof field.id === 'string' && field.id ? field.id : makeId();
+    if (usedIds.has(id)) id = makeId();
+    usedIds.add(id);
+    return { id, type, label };
+  }).filter(Boolean);
 }
 
 async function importAssessmentBackup(file) {
@@ -185,13 +229,15 @@ function showToast(message) {
 
 function switchView(name) {
   $$('.view').forEach(view => view.classList.toggle('active', view.id === `${name}View`));
-  $$('.flow-step').forEach(step => step.classList.toggle('active', step.dataset.view === name));
+  $$('.flow-nav .flow-step').forEach(step => step.classList.toggle('active', step.dataset.view === name));
   if (name === 'generate') renderAssessmentSelect();
+  if (name === 'batch') renderBatchAssessmentSelect();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-$$('.flow-step').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
+$$('.flow-nav .flow-step').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
 $('#backToRegister').addEventListener('click', () => switchView('register'));
+$('#backToIndividual').addEventListener('click', () => switchView('generate'));
 
 function renderStandards(subject, selectedCodes = []) {
   const list = $('#standardsList');
@@ -233,16 +279,74 @@ $('#clearStandards').addEventListener('click', () => {
   updateSelectedStandardCount();
 });
 
+function appendOptionalFieldRow(field = { id: makeId(), type: 'custom', label: '' }) {
+  const container = $('#optionalFieldConfig');
+  if (container.children.length >= 10) return showToast('선택 작성 항목은 최대 10개까지 추가할 수 있습니다.');
+
+  const row = document.createElement('div');
+  row.className = 'content-field-row';
+  row.dataset.fieldId = field.id;
+  row.dataset.fieldType = field.type;
+
+  const content = document.createElement('div');
+  const status = document.createElement('span');
+  status.className = 'field-status optional';
+  status.textContent = '선택';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 40;
+  input.required = true;
+  input.value = field.label;
+  input.placeholder = '작성 항목 이름 입력';
+  input.setAttribute('aria-label', '선택 작성 항목 이름');
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'remove-field-button';
+  remove.title = '이 작성 항목 삭제';
+  remove.setAttribute('aria-label', `${field.label || '새 작성 항목'} 삭제`);
+  remove.textContent = '×';
+  remove.addEventListener('click', () => row.remove());
+  content.append(status, input);
+  row.append(content, remove);
+  container.append(row);
+  if (!field.label) input.focus();
+}
+
+function renderOptionalFieldConfig(fields = defaultOptionalFields()) {
+  $('#optionalFieldConfig').replaceChildren();
+  fields.forEach(field => appendOptionalFieldRow(field));
+}
+
+function collectOptionalFields() {
+  const fields = $$('#optionalFieldConfig .content-field-row').map(row => ({
+    id: row.dataset.fieldId || makeId(),
+    type: row.dataset.fieldType || 'custom',
+    label: clean(row.querySelector('input').value).slice(0, 40)
+  }));
+  const labels = fields.map(field => field.label);
+  if (labels.some(label => !label)) return null;
+  if (new Set(labels).size !== labels.length) {
+    showToast('작성 항목 이름은 서로 다르게 입력해 주세요.');
+    return null;
+  }
+  return fields;
+}
+
+$('#addOptionalField').addEventListener('click', () => appendOptionalFieldRow());
+
 $('#assessmentForm').addEventListener('submit', event => {
   event.preventDefault();
   const standards = $$('#standardsList input:checked').map(input => input.value);
   if (!standards.length) return showToast('관련 성취기준을 하나 이상 선택해 주세요.');
+  const optionalFields = collectOptionalFields();
+  if (!optionalFields) return;
 
   const data = {
     id: $('#editingId').value || makeId(),
     name: clean($('#assessmentName').value),
     subject: $('#assessmentSubject').value,
     activity: clean($('#assessmentActivity').value),
+    optionalFields,
     standards,
     updatedAt: new Date().toISOString()
   };
@@ -263,6 +367,7 @@ function resetAssessmentForm() {
   $('#formTitle').textContent = '새 수행평가';
   $('#saveButtonText').textContent = '수행평가 등록하기';
   $('#cancelEdit').classList.add('hidden');
+  renderOptionalFieldConfig();
   renderStandards('');
 }
 
@@ -278,6 +383,7 @@ function editAssessment(id) {
   $('#assessmentName').value = item.name;
   $('#assessmentSubject').value = item.subject;
   $('#assessmentActivity').value = item.activity;
+  renderOptionalFieldConfig(item.optionalFields);
   $('#formTitle').textContent = '수행평가 수정';
   $('#saveButtonText').textContent = '수정 내용 저장하기';
   $('#cancelEdit').classList.remove('hidden');
@@ -321,10 +427,14 @@ function renderAssessmentList() {
     const remove = document.createElement('button'); remove.type = 'button'; remove.title = '삭제'; remove.className = 'delete'; remove.textContent = '×'; remove.addEventListener('click', () => deleteAssessment(item.id));
     menu.append(edit, remove); top.append(info, menu);
     const activity = document.createElement('p'); activity.textContent = item.activity;
-    const meta = document.createElement('span'); meta.className = 'assessment-meta'; meta.textContent = `성취기준 ${item.standards.length}개 연결`;
-    const use = document.createElement('button'); use.type = 'button'; use.className = 'use-button'; use.textContent = '이 평가로 세특 만들기 →';
-    use.addEventListener('click', () => { switchView('generate'); renderAssessmentSelect(item.id); });
-    card.append(top, activity, meta, use);
+    const meta = document.createElement('span'); meta.className = 'assessment-meta'; meta.textContent = `성취기준 ${item.standards.length}개 · 작성 항목 ${1 + item.optionalFields.length}개`;
+    const actions = document.createElement('div'); actions.className = 'assessment-actions';
+    const useIndividual = document.createElement('button'); useIndividual.type = 'button'; useIndividual.className = 'use-button individual'; useIndividual.textContent = '이 평가로 개별 세특 만들기 →';
+    useIndividual.addEventListener('click', () => { switchView('generate'); renderAssessmentSelect(item.id); });
+    const useBatch = document.createElement('button'); useBatch.type = 'button'; useBatch.className = 'use-button batch'; useBatch.textContent = '이 평가로 학급 세특 만들기 →';
+    useBatch.addEventListener('click', () => { switchView('batch'); renderBatchAssessmentSelect(item.id); });
+    actions.append(useIndividual, useBatch);
+    card.append(top, activity, meta, actions);
     container.append(card);
   });
 }
@@ -342,13 +452,65 @@ function renderSelectedAssessment() {
   const item = assessments.find(assessment => assessment.id === $('#assessmentSelect').value);
   const box = $('#selectedAssessment');
   const promptButton = $('#copyAssessmentPrompt');
+  const studentDataButton = $('#copyStudentData');
   box.replaceChildren();
   box.classList.toggle('hidden', !item);
   promptButton.disabled = !item;
-  if (!item) return;
+  studentDataButton.disabled = !item;
+  if (!item) {
+    renderStudentOptionalFields();
+    return;
+  }
   const title = document.createElement('strong'); title.textContent = `${item.subject} · ${item.name}`;
-  const desc = document.createElement('p'); desc.textContent = `${item.activity}  |  성취기준 ${item.standards.length}개`;
+  const desc = document.createElement('p'); desc.textContent = `${item.activity}  |  성취기준 ${item.standards.length}개  |  작성 항목 ${1 + item.optionalFields.length}개`;
   box.append(title, desc);
+  renderStudentOptionalFields(item);
+}
+
+function renderStudentOptionalFields(item) {
+  const container = $('#optionalStudentFields');
+  container.replaceChildren();
+  if (!item) return;
+
+  item.optionalFields.forEach(field => {
+    const label = document.createElement('label');
+    label.className = 'field';
+    const heading = document.createElement('span');
+    heading.append(document.createTextNode(`${field.label} `));
+    const optional = document.createElement('i');
+    optional.className = 'optional';
+    optional.textContent = '선택';
+    heading.append(optional);
+
+    const control = field.type === 'career' ? document.createElement('input') : document.createElement('textarea');
+    control.dataset.studentFieldId = field.id;
+    if (field.type === 'career') {
+      control.setAttribute('list', 'careerTrackOptions');
+      control.placeholder = '예: 공학, 자연과학, 의약학';
+    } else {
+      control.rows = field.type === 'teacher' ? 4 : 3;
+      control.placeholder = field.type === 'teacher'
+        ? '예: 복잡한 풀이도 끝까지 검토하며 오류를 스스로 수정하는 태도가 인상적임'
+        : `${field.label}에 해당하는 내용을 입력하세요.`;
+    }
+
+    const guide = document.createElement('small');
+    guide.textContent = field.type === 'career'
+      ? '목록에서 고르거나 학생의 진로를 직접 입력할 수 있습니다.'
+      : field.type === 'teacher'
+        ? '학생의 성취, 태도, 성장 과정에 관한 교사의 종합 평가를 입력하세요.'
+        : '이 학생에게 해당하는 내용을 입력하세요. 비워 두어도 초안을 만들 수 있습니다.';
+    label.append(heading, control, guide);
+    container.append(label);
+  });
+}
+
+function getStudentFieldEntries(item) {
+  const controls = $$('#optionalStudentFields [data-student-field-id]');
+  return item.optionalFields.map(field => ({
+    ...field,
+    value: controls.find(control => control.dataset.studentFieldId === field.id)?.value.trim() || ''
+  }));
 }
 
 $('#assessmentSelect').addEventListener('change', renderSelectedAssessment);
@@ -432,28 +594,75 @@ function evidenceExpansion(raw, maximum = 1) {
   return candidates.slice(0, maximum);
 }
 
-function assessmentIntro(item) {
-  let activity = clean(removeSubjectWords(item.activity))
-    .replace(/(?:하는\s*)?(?:수행평가|평가\s*활동)$/u, '')
-    .replace(/틀린\s*문제나\s*모르는\s*문제에\s*대해/g, '틀렸거나 해결하지 못한 문제의')
-    .replace(/관련\s*개념을\s*정리하고\s*다양한\s*방법으로\s*풀어보는/g, '관련 개념을 정리한 뒤 다양한 해결 방법을 탐색하는')
-    .replace(/풀어\s*보는/g, '해결 방법을 탐색하는')
-    .replace(/해\s*보는/g, '시도하는')
-    .trim();
-  activity = activity
-    .replace(/(작성|분석|비교|설명|발표|계산|탐구|제출)$/u, '$1함')
-    .replace(/하는$/u, '함');
-  return `‘${item.name}’ 수행평가에서 ${activity}.`;
+function compactText(text, maximum = 58) {
+  const value = clean(text);
+  if (value.length <= maximum) return value;
+  const shortened = value.slice(0, maximum + 1);
+  const lastSpace = shortened.lastIndexOf(' ');
+  return shortened.slice(0, lastSpace > maximum * 0.65 ? lastSpace : maximum).trim();
+}
+
+function assessmentIntro(item, length = 'medium') {
+  const activityMaximum = { short: 75, medium: 125, long: 175 }[length] || 125;
+  const activity = compactText(item.activity, activityMaximum);
+  return `‘${compactText(item.name)}’ 수행평가에서 ‘${activity}’이라는 활동을 수행함.`;
+}
+
+function assessmentProcessSentence(item) {
+  const context = `${item.name} ${item.activity}`;
+  if (/발표|설명|토론|질문|답변/u.test(context)) return '수행 과정에서 핵심 내용과 해결 절차를 정리하고 이를 수학적 표현을 활용해 전달함.';
+  if (/보고서|노트|활동지|기록|작성|서술/u.test(context)) return '활동 과정에서 사용한 개념과 해결 절차, 결과를 순서 있게 정리하여 산출물에 구체적으로 기록함.';
+  if (/자료|데이터|통계|도표|표|그래프|공학\s*도구|엑셀|지오지브라/u.test(context)) return '주어진 자료에서 필요한 정보를 선별하고 표·식·그래프 등 적절한 수학적 표현으로 정리하여 결과를 해석함.';
+  if (/탐구|조사|주제|실생활|진로/u.test(context)) return '수행 주제와 관련된 수학 개념을 찾아 실제 활동 내용과 연결하고 탐구 과정과 결과를 구체적으로 정리함.';
+  if (/문제|문항|풀이|해결/u.test(context)) return '문제의 조건과 필요한 개념을 확인한 뒤 해결 절차를 단계적으로 적용하고 결과의 타당성을 점검함.';
+  return '수행 과제의 조건을 확인하고 관련 수학 개념을 적용하여 활동 과정과 결과를 구체적으로 정리함.';
+}
+
+function assessmentSupportSentences(item, evidence) {
+  const context = `${item.name} ${item.activity} ${evidence}`;
+  const sentences = [
+    '수행평가에서 제시한 활동의 목적과 조건을 확인하고 관찰 근거에 나타난 수행 과정을 중심으로 과제를 구체화함.',
+    '활동 과정에서 사용한 수학 개념과 표현을 수행평가의 주제에 맞게 연결하여 해결 과정과 결과를 체계적으로 정리함.',
+    '관찰된 활동 내용과 산출물의 특징을 바탕으로 핵심 수행과 세부 과정을 구분하여 기록함.'
+  ];
+  if (/보고서|노트|활동지|기록|작성|서술/u.test(context)) sentences.push('수행 과정에서 확인한 개념과 풀이의 근거를 순서 있게 배열하여 기록의 흐름이 드러나도록 산출물을 구성함.');
+  if (/발표|설명|토론|질문|답변/u.test(context)) sentences.push('발표할 핵심 내용과 수학적 근거를 구분하여 정리하고 해결 과정이 전달되도록 표현을 다듬어 설명함.');
+  if (/자료|데이터|통계|도표|표|그래프|엑셀|지오지브라|공학\s*도구/u.test(context)) sentences.push('자료의 특징을 비교하고 필요한 정보를 수학적 표현으로 변환하여 분석 과정과 결과의 의미가 드러나도록 정리함.');
+  if (/탐구|조사|주제|실생활|진로/u.test(context)) sentences.push('수행 주제와 관련된 개념 및 사례의 관계를 살펴보고 탐구 과정에서 확인한 내용을 수학적 근거와 함께 구체화함.');
+  if (/문제|문항|풀이|해결/u.test(context)) sentences.push('문제의 조건과 적용할 개념을 구분하고 풀이의 각 단계가 자연스럽게 이어지도록 해결 과정을 정리함.');
+  return sentences;
+}
+
+function observationActivityContext(item, sentence) {
+  const evidenceContext = sentence;
+  const assessmentContext = `${item.name} ${item.activity}`;
+  if (/발표|설명|토론|질문|답변/u.test(evidenceContext)) return '발표와 설명 과정';
+  if (/보고서|노트|활동지|기록|작성|서술/u.test(evidenceContext)) return '산출물 작성 과정';
+  if (/자료|데이터|통계|도표|표|그래프|엑셀|지오지브라|공학\s*도구/u.test(evidenceContext)) return '자료 분석 과정';
+  if (/탐구|조사|주제|실생활|진로/u.test(evidenceContext)) return '주제 탐구 과정';
+  if (/문제|문항|풀이|해결|계산/u.test(evidenceContext)) return '문제 해결 과정';
+  if (/발표|설명|토론|질문|답변/u.test(assessmentContext)) return '발표와 설명 과정';
+  if (/보고서|노트|활동지|기록|작성|서술/u.test(assessmentContext)) return '산출물 작성 과정';
+  if (/자료|데이터|통계|도표|표|그래프|엑셀|지오지브라|공학\s*도구/u.test(assessmentContext)) return '자료 분석 과정';
+  if (/탐구|조사|주제|실생활|진로/u.test(assessmentContext)) return '주제 탐구 과정';
+  if (/문제|문항|풀이|해결|계산/u.test(assessmentContext)) return '문제 해결 과정';
+  return '과제 수행 과정';
 }
 
 function contextualizeObservations(sentences, item) {
   const activity = item.activity;
-  return sentences.map(sentence => {
-    if (/전\s*단원.*(?:제출|작성)/u.test(sentence) && /배움\s*노트|성찰\s*노트/u.test(activity)) {
-      return '전 단원의 배움노트와 성찰노트를 빠짐없이 성실하게 작성하여 제출함.';
+  return sentences.map((sentence, index) => {
+    let observation = sentence;
+    if (/전\s*단원.*(?:제출|작성)/u.test(observation) && /배움\s*노트|성찰\s*노트/u.test(activity)) {
+      observation = '전 단원의 배움노트와 성찰노트를 빠짐없이 성실하게 작성하여 제출함.';
+    } else if (/성실히\s*제출함/u.test(observation)) {
+      observation = observation.replace(/성실히\s*제출함/u, '빠짐없이 성실하게 작성하여 제출함');
     }
-    if (/성실히\s*제출함/u.test(sentence)) return sentence.replace(/성실히\s*제출함/u, '빠짐없이 성실하게 작성하여 제출함');
-    return sentence;
+    const context = observationActivityContext(item, observation);
+    const lead = index === 0
+      ? `‘${compactText(item.name)}’ 수행평가의 ${context}에서`
+      : `해당 수행평가의 ${context}에서`;
+    return `${lead} ${observation.replace(/^\s+/, '')}`;
   });
 }
 
@@ -481,6 +690,23 @@ function isUninformativeEvaluation(text) {
   return /^(?:평범함|보통임|특이\s*사항\s*없음|없음|무난함)[.!?。\s]*$/u.test(text.trim());
 }
 
+function objectParticle(text) {
+  const value = text.trim();
+  const last = value.charCodeAt(value.length - 1);
+  const hasFinalConsonant = last >= 0xac00 && last <= 0xd7a3 && (last - 0xac00) % 28 !== 0;
+  return `${value}${hasFinalConsonant ? '을' : '를'}`;
+}
+
+function customStudentSentence(label, value) {
+  if (!label || !value) return '';
+  const target = objectParticle(value);
+  if (/주제/u.test(label)) return `${target} ${label}로 정하여 탐구 활동을 수행함.`;
+  if (/제목/u.test(label)) return `${target} ${label}으로 정하여 탐구 활동을 수행함.`;
+  if (/역할/u.test(label)) return `활동에서 ${value} 역할을 맡아 과제를 수행함.`;
+  if (/개념|내용|대상|사례|문제|문항/u.test(label)) return `${target} ${label}으로 정하여 관련 활동을 수행함.`;
+  return `${label}에 ${target} 기록하고 이를 바탕으로 활동을 수행함.`;
+}
+
 function restrainedLevelSentence(achievement) {
   const sentences = {
     excellent: '관찰된 과제 수행 과정에서 맡은 활동을 꾸준히 이어가고 결과물을 책임감 있게 완성하는 자기관리능력이 돋보임.',
@@ -489,6 +715,61 @@ function restrainedLevelSentence(achievement) {
     growth: '피드백과 재시도를 통해 부족한 부분을 보완하며 과제 수행의 완성도를 높여가는 모습을 보임.'
   };
   return sentences[achievement];
+}
+
+function applyAchievementExpression(sentence, achievement) {
+  if (!sentence || !achievement) return sentence;
+  const replacements = {
+    excellent: {
+      '수행함': '주도적이고 완성도 높게 수행함', '정리함': '논리적 구조가 선명하게 드러나도록 정리함',
+      '기록함': '핵심과 세부가 명확히 드러나도록 기록함', '작성함': '논리적 흐름과 완성도를 갖추어 작성함',
+      '설명함': '수학적 근거를 들어 명료하게 설명함', '분석함': '여러 요소의 관계를 종합하여 분석함',
+      '비교함': '공통점과 차이의 의미까지 짚어 비교함', '적용함': '새로운 조건에도 정확하고 능숙하게 적용함',
+      '활용함': '목적에 맞게 능숙하고 효과적으로 활용함', '도출함': '타당한 근거를 바탕으로 정확하게 도출함',
+      '제시함': '구체적인 수학적 근거와 함께 제시함', '수정함': '오류의 원인을 분석하여 정확하게 수정함',
+      '구체화함': '수학적 근거와 세부 내용을 갖추어 구체화함', '제출함': '빠짐없이 완성도 있게 작성하여 제출함'
+    },
+    good: {
+      '수행함': '충실하고 안정적으로 수행함', '정리함': '핵심이 드러나도록 체계적으로 정리함',
+      '기록함': '과정과 결과가 드러나도록 충실히 기록함', '작성함': '정확한 내용과 흐름을 갖추어 작성함',
+      '설명함': '핵심 개념과 근거를 정확하게 설명함', '분석함': '주요 요소의 관계를 정확하게 분석함',
+      '비교함': '공통점과 차이를 기준에 따라 비교함', '적용함': '학습한 개념을 상황에 맞게 정확히 적용함',
+      '활용함': '목적과 상황에 맞게 적절히 활용함', '도출함': '근거에 따라 타당한 결과를 도출함',
+      '제시함': '핵심 근거를 갖추어 구체적으로 제시함', '수정함': '확인한 오류를 정확하게 수정함',
+      '구체화함': '핵심 내용과 근거를 갖추어 구체화함', '제출함': '정해진 형식에 맞추어 충실히 제출함'
+    },
+    steady: {
+      '수행함': '정해진 절차에 따라 꾸준히 수행함', '정리함': '배운 개념을 바탕으로 순서 있게 정리함',
+      '기록함': '안내된 항목에 따라 차근차근 기록함', '작성함': '기본 내용과 절차를 갖추어 작성함',
+      '설명함': '배운 개념을 바탕으로 핵심 내용을 설명함', '분석함': '주어진 기준에 따라 주요 내용을 분석함',
+      '비교함': '제시된 기준에 따라 공통점과 차이를 비교함', '적용함': '기본 개념을 주어진 상황에 적용함',
+      '활용함': '안내된 방법에 따라 필요한 표현을 활용함', '도출함': '풀이 절차에 따라 결과를 도출함',
+      '제시함': '활동에서 확인한 내용을 중심으로 제시함', '수정함': '안내를 참고하여 잘못된 부분을 수정함',
+      '구체화함': '배운 내용과 활동 과정을 바탕으로 구체화함', '제출함': '안내된 형식에 맞추어 제출함'
+    },
+    growth: {
+      '수행함': '안내를 바탕으로 꾸준히 수행함', '정리함': '확인과 보완을 거쳐 차근차근 정리함',
+      '기록함': '빠진 내용을 확인하고 보완하며 기록함', '작성함': '도움을 받아 부족한 부분을 보완하며 작성함',
+      '설명함': '질문과 확인을 거쳐 자신의 말로 설명함', '분석함': '제시된 기준을 참고하여 필요한 내용을 분석함',
+      '비교함': '안내에 따라 공통점과 차이를 찾아 비교함', '적용함': '도움을 받아 기본 개념을 상황에 적용함',
+      '활용함': '사용 방법을 확인하며 필요한 표현을 활용함', '도출함': '풀이 과정을 점검하며 결과를 도출함',
+      '제시함': '확인한 내용을 바탕으로 결과를 제시함', '수정함': '피드백을 반영하여 부족한 부분을 수정함',
+      '구체화함': '질문과 보완을 거쳐 활동 내용을 구체화함', '제출함': '부족한 부분을 보완하여 제출함'
+    }
+  }[achievement];
+  let result = sentence;
+  for (const [ending, replacement] of Object.entries(replacements || {})) {
+    const pattern = new RegExp(`${ending.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.?$`, 'u');
+    if (pattern.test(result)) {
+      result = result.replace(pattern, `${replacement}.`);
+      break;
+    }
+  }
+  if (achievement === 'excellent') result = result.replace(/(?:우수함|돋보임|두드러짐)\.?$/u, '매우 두드러짐.');
+  if (achievement === 'good') result = result.replace(/탁월함\.?$/u, '우수함.');
+  if (achievement === 'steady') result = result.replace(/(?:탁월함|우수함|돋보임|두드러짐)\.?$/u, '안정적으로 드러남.');
+  if (achievement === 'growth') result = result.replace(/(?:탁월함|우수함|돋보임|두드러짐)\.?$/u, '꾸준히 향상됨.');
+  return result;
 }
 
 function polishRecord(sentences) {
@@ -508,19 +789,31 @@ function polishRecord(sentences) {
     .trim();
 }
 
-function generateRecord() {
-  const item = assessments.find(assessment => assessment.id === $('#assessmentSelect').value);
-  if (!item) return showToast('등록한 수행평가를 선택해 주세요.');
-  const evidence = $('#studentEvidence').value.trim();
-  if (!evidence) return showToast('학생 관찰 근거를 입력해 주세요.');
-  const competencies = $$('#competencyChoices input:checked').map(input => input.value);
-  if (!competencies.length) return showToast('강조할 수학 역량을 하나 이상 선택해 주세요.');
+function fitRecordLength(sentences, length, supportSentences = []) {
+  const guide = {
+    short: { minimum: 230, maximum: 370 },
+    medium: { minimum: 380, maximum: 590 },
+    long: { minimum: 560, maximum: 850 }
+  }[length];
+  const polished = [...sentences, ...supportSentences].filter(Boolean).map(observableEnding).filter(Boolean);
+  const selected = [];
+  polished.forEach(sentence => {
+    const candidate = [...selected, sentence].join(' ');
+    if (candidate.length <= guide.maximum || selected.join(' ').length < guide.minimum) selected.push(sentence);
+  });
+  return polishRecord(selected);
+}
 
-  const achievement = $('input[name="achievement"]:checked').value;
-  const length = $('input[name="length"]:checked').value;
-  const career = clean($('#careerTrack').value);
-  const teacherEvaluation = $('#teacherEvaluation').value.trim();
-  const observationLimit = length === 'short' ? 2 : length === 'medium' ? 4 : 7;
+function composeOfflineRecord({ item, evidence, fieldEntries, competencies, achievement, length }) {
+  const career = clean(fieldEntries.find(field => field.type === 'career')?.value || '');
+  const teacherEvaluation = fieldEntries.find(field => field.type === 'teacher')?.value || '';
+  const customEntries = fieldEntries.filter(field => field.type === 'custom' && field.value);
+  const sourceLength = evidence.length + fieldEntries.reduce((sum, field) => sum + field.value.length, 0);
+  const richThreshold = length === 'short' ? 170 : length === 'medium' ? 280 : 430;
+  const hasRichEvidence = sourceLength >= richThreshold;
+  const customLimit = length === 'short' ? 1 : length === 'medium' ? 2 : 4;
+  const customSentences = customEntries.slice(0, customLimit).map(field => customStudentSentence(field.label, field.value));
+  const observationLimit = length === 'short' ? 2 : length === 'medium' ? 5 : 8;
   const observations = contextualizeObservations(observationSentences(evidence, observationLimit), item);
   const teacherIsMeaningful = teacherEvaluation && !isUninformativeEvaluation(teacherEvaluation);
   const teacherObservations = teacherIsMeaningful ? observationSentences(teacherEvaluation, length === 'long' ? 3 : 2) : [];
@@ -528,42 +821,86 @@ function generateRecord() {
   const careerSentence = !career ? '' : career === '진로 탐색 중'
     ? '수행 주제와 연관된 다양한 진로 자료를 찾아 수학의 활용 장면을 구체적으로 정리함.'
     : `${careerLabel} 진로와 수행 주제의 연관성을 자료와 수학적 근거를 바탕으로 구체화함.`;
-  const intro = assessmentIntro(item);
-  const competencyContext = `${item.activity} ${evidence}`;
+  const intro = assessmentIntro(item, length);
+  const processSentence = assessmentProcessSentence(item);
+  const competencyContext = `${item.activity} ${fieldEntries.map(field => field.value).join(' ')} ${evidence}`;
   const competenceSentences = competencies.map(key => contextualCompetencySentence(key, competencyContext));
-  const levelSentence = teacherIsMeaningful ? '' : evidence.length < 100
+  const levelSentence = !achievement ? '' : evidence.length < 100
     ? restrainedLevelSentence(achievement)
     : pick(veteranLevelText[achievement], 1);
-  const expansionCount = length === 'long' && evidence.length < 520 ? 2 : length === 'medium' && evidence.length < 320 ? 1 : 0;
+  const expansionCount = length === 'short' ? 1 : length === 'medium' ? (hasRichEvidence ? 2 : 3) : (hasRichEvidence ? 3 : 5);
   const expansions = evidenceExpansion(evidence, expansionCount);
-  let sentences = [intro, ...observations];
+  let sentences = [intro, ...customSentences, ...observations];
 
   if (length === 'short') {
-    sentences.push(competenceSentences[0], ...teacherObservations, levelSentence);
+    sentences.push(...teacherObservations.slice(0, 1), expansions[0], competenceSentences[0], levelSentence);
   } else if (length === 'medium') {
-    sentences.push(...expansions, ...competenceSentences.slice(0, 2), careerSentence, ...teacherObservations, levelSentence);
+    sentences.push(processSentence, ...teacherObservations, ...expansions, ...competenceSentences.slice(0, 2), careerSentence, levelSentence);
   } else {
     sentences.push(
+      processSentence,
+      ...teacherObservations,
       ...expansions,
       ...competenceSentences,
       careerSentence,
-      '풀이와 탐구의 각 단계에서 사용한 개념과 전략을 스스로 점검하고, 발견한 오류를 수정하여 결과의 논리적 완결성을 높임.',
-      ...teacherObservations,
       levelSentence
     );
   }
 
-  $('#result').value = polishRecord(sentences);
+  const supportCount = length === 'short' ? 1 : length === 'medium' ? 6 : 8;
+  const tonedSentences = sentences.map(sentence => applyAchievementExpression(sentence, achievement));
+  const tonedSupport = assessmentSupportSentences(item, evidence)
+    .slice(0, supportCount)
+    .map(sentence => applyAchievementExpression(sentence, achievement));
+  return fitRecordLength(tonedSentences, length, tonedSupport);
+}
+
+function generateRecord() {
+  const item = assessments.find(assessment => assessment.id === $('#assessmentSelect').value);
+  if (!item) return showToast('등록한 수행평가를 선택해 주세요.');
+  const evidence = $('#studentEvidence').value.trim();
+  if (!evidence) return showToast('학생 관찰 근거를 입력해 주세요.');
+  const competencies = $$('#competencyChoices input:checked').map(input => input.value);
+  const achievement = $('input[name="achievement"]:checked').value;
+  const length = $('input[name="length"]:checked').value;
+  const fieldEntries = getStudentFieldEntries(item);
+
+  $('#result').value = composeOfflineRecord({ item, evidence, fieldEntries, competencies, achievement, length });
   $('#emptyState').classList.add('hidden');
   $('#resultArea').classList.remove('hidden');
   updateCount();
 }
 
-$('#studentForm').addEventListener('submit', event => {
-  event.preventDefault();
+function createOfflineDraft() {
   variant = 0;
   generateRecord();
+}
+
+$('#generateOfflineDraft').addEventListener('click', createOfflineDraft);
+$('#studentForm').addEventListener('submit', event => {
+  event.preventDefault();
+  createOfflineDraft();
 });
+
+let offlineDraftRefreshTimer;
+function refreshVisibleOfflineDraft() {
+  if ($('#resultArea').classList.contains('hidden')) return;
+  window.clearTimeout(offlineDraftRefreshTimer);
+  offlineDraftRefreshTimer = window.setTimeout(() => {
+    if (!$('#assessmentSelect').value || !$('#studentEvidence').value.trim()) {
+      $('#result').value = '';
+      $('#resultArea').classList.add('hidden');
+      $('#emptyState').classList.remove('hidden');
+      updateCount();
+      return;
+    }
+    variant = 0;
+    generateRecord();
+  }, 80);
+}
+
+$('#studentForm').addEventListener('input', refreshVisibleOfflineDraft);
+$('#studentForm').addEventListener('change', refreshVisibleOfflineDraft);
 
 $('#regenerate').addEventListener('click', () => { variant += 1; generateRecord(); });
 
@@ -588,7 +925,7 @@ async function copyText(text) {
   }
 }
 
-function buildAIPrompt() {
+function buildStudentDataPrompt() {
   const item = assessments.find(assessment => assessment.id === $('#assessmentSelect').value);
   if (!item) return '';
   const competencyNames = {
@@ -602,78 +939,58 @@ function buildAIPrompt() {
   const selectedCompetencies = $$('#competencyChoices input:checked').map(input => competencyNames[input.value]);
   const achievement = $('input[name="achievement"]:checked').value;
   const length = $('input[name="length"]:checked').value;
-  const standards = item.standards.map(code => {
-    const standard = ACHIEVEMENT_STANDARDS[item.subject]?.find(entry => entry.code === code);
-    return standard ? `[${standard.code}] ${standard.text}` : '';
-  }).filter(Boolean).join('\n');
-  const career = clean($('#careerTrack').value) || '입력하지 않음';
-  const teacherEvaluation = clean($('#teacherEvaluation').value) || '입력하지 않음';
+  const optionalInputs = getStudentFieldEntries(item)
+    .map(field => `- ${field.label}: ${field.value || '입력하지 않음'}`)
+    .join('\n');
 
-  return `# 역할
-한국 고등학교에서 30년간 근무한 베테랑 수학교사처럼 교과세부능력 및 특기사항을 작성해 주세요. 품격 있고 신뢰감 있는 교사 관찰 문체를 사용하세요.
-
-# 입력 자료
-- 과목: ${item.subject}
+  return `# 학생별 원본 자료
 - 수행평가명: ${item.name}
-- 수행평가 활동: ${item.activity}
-- 학생 관찰 근거: ${$('#studentEvidence').value.trim()}
-- 강조할 수학 역량: ${selectedCompetencies.join(', ')}
+- 학생 관찰 근거(학생 활동 내용): ${$('#studentEvidence').value.trim()}
+${optionalInputs ? `${optionalInputs}\n` : ''}- 강조할 수학 역량: ${selectedCompetencies.join(', ') || '선택하지 않음'}
 - 성취 수준: ${achievementNames[achievement]}
 - 희망 분량: ${lengthGuide[length]}
-- 진로 계열: ${career}
-- 교사의 평가: ${teacherEvaluation}
-- 프로그램이 만든 1차 초안: ${$('#result').value.trim()}
 
-# 교육과정 내부 참고 자료
-아래 내용은 활동을 해석하기 위한 참고 자료일 뿐입니다. 최종 세특에는 성취기준 코드, 성취기준 원문, '성취기준에 따르면' 같은 표현을 절대 노출하지 마세요.
-${standards || '없음'}
-
-# 작성 원칙
-1. 학생 관찰 근거를 최우선으로 삼고, 입력에 없는 행동·성과·감정·수치·친구의 반응을 만들어내지 마세요.
-2. 수행평가 설명을 그대로 인용하거나 '수행평가 내용을 주제로 과제를 수행함'이라고 쓰지 말고, 실제로 활동한 것처럼 자연스럽게 풀어 쓰세요.
-3. '학생', '그는', '그가', '그의'를 주어로 사용하지 마세요.
-4. 모든 문장은 현재형 명사형 어미인 '~함', '~음', '~임'을 중심으로 끝내세요. 과거형과 미래형 종결은 사용하지 마세요.
-5. 깨달음·느낌·생각·다짐처럼 교사가 직접 확인할 수 없는 내면 상태를 단정하지 말고, 작성함·설명함·분석함·질문함·수정함·태도를 보임 등 관찰 가능한 행동으로 표현하세요.
-6. 관찰 근거가 짧으면 수행평가 맥락 안에서 구체화하되 새로운 사실을 추가하지 말고, 길면 중복을 줄여 핵심 행동과 성장 과정이 드러나도록 다듬으세요.
-7. 선택한 수학 역량은 관찰 근거로 뒷받침되는 경우에만 자연스럽게 녹여 쓰고, 역량 이름을 기계적으로 나열하지 마세요.
-8. '탁월함', '우수함', '논리적 사고', '자기주도성', '문제해결능력', '추론', '표현력', '성실성', '끈기' 등의 긍정어휘는 성취 수준과 근거에 맞게 절제하여 사용하세요.
-9. '다짐함', '느낌', '생각함', '깨닫게 됨', '알게 됨', '관심을 갖게 됨', '이해함함'으로 문장을 끝내지 마세요.
-10. 진로 계열과 교사의 평가는 입력된 경우에만 반영하고, 1차 초안의 어색한 표현이나 근거 없는 칭찬은 과감히 삭제하세요.
-
-# 최종 검수
-출력 전에 관찰 근거 충실성, 사실 왜곡 여부, 성취기준 노출 여부, 금지 주어, 종결 어미, 문장 간 중복을 내부적으로 점검하세요.
-
-# 출력 형식
-설명이나 제목 없이 완성된 세특 한 문단만 출력하세요.`;
+# 요청
+이 대화방에 먼저 입력된 수행평가 지침과 위 원본 자료만을 근거로 최종 세특 한 문단을 작성하세요. 입력에 없는 사실은 추가하지 마세요.`;
 }
 
-function buildCommonPrompt() {
-  return `# 역할
-앞으로 이 대화에서는 한국 고등학교에서 30년간 근무한 베테랑 수학교사처럼 교과세부능력 및 특기사항을 다듬어 주세요. 사용자가 학생별 세특 초안을 한 문단씩 보내면 아래 원칙에 따라 완성도 높은 최종 문장으로 교정하세요.
-
-# 가장 중요한 원칙
-1. 초안에 포함된 관찰 사실을 최우선으로 보존하고, 입력에 없는 행동·성과·감정·수치·친구의 반응을 새로 만들지 마세요.
+function buildWritingGuide() {
+  return `# 가장 중요한 원칙
+1. 원본 자료의 관찰 사실을 최우선으로 보존하고, 입력에 없는 행동·성과·감정·수치·친구의 반응을 새로 만들지 마세요.
 2. 학생별 메시지는 각각 독립된 기록입니다. 이전 학생의 활동이나 평가를 다음 학생의 문장에 절대 섞지 마세요.
-3. 수행평가 설명을 그대로 인용하거나 ‘수행평가 내용을 주제로 과제를 수행함’처럼 쓰지 말고, 실제로 수행한 행동이 자연스럽게 드러나도록 풀어 쓰세요.
+3. 수행평가 설명은 배경 자료로만 사용하고 최종 문장에 전부 옮기지 마세요. 학생의 실제 활동을 이해하는 데 필요한 맥락만 짧게 반영하세요.
 4. 어색한 나열과 반복을 줄이고, 관찰 행동 → 구체적 수행 과정 → 드러난 수학 역량 또는 성장의 순서로 문장을 조직하세요.
+5. 학생 관찰 근거의 문장을 그대로 복사해 나열하지 말고, 각 행동이 수행평가의 어느 활동·과정에서 나타났는지 연결하여 자연스러운 교사 관찰 문장으로 재구성하세요.
 
 # 문체와 표현
 1. ‘학생’, ‘그는’, ‘그가’, ‘그의’를 주어로 사용하지 마세요.
 2. 품격 있고 신뢰감 있는 교사 관찰 문체를 사용하세요.
 3. 모든 문장은 현재형 명사형 어미인 ‘~함’, ‘~음’, ‘~임’을 중심으로 끝내고 과거형·미래형 종결을 사용하지 마세요.
-4. 깨달음·느낌·생각·다짐처럼 교사가 직접 확인할 수 없는 내면 상태를 단정하지 마세요. 작성함·설명함·분석함·질문함·수정함·태도를 보임처럼 관찰 가능한 행동으로 표현하세요.
+4. 깨달음·느낌·생각·다짐처럼 교사가 직접 확인할 수 없는 내면 상태를 단정하지 마세요.
 5. ‘다짐함’, ‘느낌’, ‘생각함’, ‘깨닫게 됨’, ‘알게 됨’, ‘관심을 갖게 됨’, ‘이해함함’으로 문장을 끝내지 마세요.
-6. 성취기준 코드나 원문, ‘성취기준에 따르면’ 같은 행정적 문구가 초안에 있으면 최종 문장에서 제거하세요.
+6. 성취기준 코드나 원문, ‘성취기준에 따르면’ 같은 행정적 문구는 최종 문장에 노출하지 마세요.
+
+# 서술어 선택 기준
+1. 권장 서술어: ‘분석함’, ‘비교함’, ‘설명함’, ‘근거를 제시함’, ‘질문함’, ‘수정함’, ‘기록함’, ‘구체화함’, ‘태도를 보임’처럼 교사가 확인할 수 있는 행동을 사용하세요.
+2. 피해야 할 서술어: ‘느꼈음’, ‘생각함’, ‘깨달음’, ‘알게 됨’, ‘관심을 갖게 됨’, ‘이해하게 됨’, ‘다짐함’처럼 관찰하기 어려운 내면 변화 표현을 사용하지 마세요.
+3. ‘했다’, ‘하였다’, ‘할 것이다’, ‘할 수 있을 것이다’ 같은 과거형·미래형 종결 대신 현재형 관찰 기록으로 바꾸세요.
+4. ‘탁월함’, ‘우수함’, ‘논리적 사고’, ‘자기주도성’, ‘문제해결능력’, ‘추론’, ‘표현력’, ‘성실성’, ‘끈기’ 등의 긍정어휘는 반드시 원본의 구체적인 근거가 있을 때만 절제하여 사용하세요.
 
 # 내용 다듬기
-1. 초안이 짧으면 이미 기록된 사실의 범위 안에서 과정과 의미가 선명해지도록 구체화하세요.
-2. 초안이 길면 핵심 관찰 근거를 보존하면서 중복과 상투적인 칭찬을 줄이세요.
+1. 원본 자료가 짧으면 이미 기록된 사실과 수행평가 맥락의 범위 안에서 과정과 의미가 선명해지도록 자연스럽게 늘리세요.
+2. 원본 자료가 길면 핵심 관찰 근거를 보존하면서 수행평가 설명, 중복 표현, 상투적인 칭찬을 과감히 줄이세요.
 3. 수학 역량은 관찰 행동으로 뒷받침되는 경우에만 자연스럽게 드러내고 역량 이름을 기계적으로 나열하지 마세요.
-4. ‘탁월함’, ‘우수함’, ‘논리적 사고’, ‘자기주도성’, ‘문제해결능력’, ‘추론’, ‘표현력’, ‘성실성’, ‘끈기’ 등의 긍정어휘는 근거에 맞게 절제하여 사용하세요.
-5. 원문의 분량을 대체로 유지하되, 문장 완성도를 위해 필요한 범위에서 적절히 늘이거나 줄이세요.
+4. 학생별 원본 자료에 표시된 희망 분량을 따르되, 사실을 늘어놓기보다 문장 완성도를 우선하세요.`;
+}
+
+function buildCommonPrompt() {
+  return `# 역할
+앞으로 이 대화에서는 한국 고등학교에서 30년간 근무한 베테랑 수학교사처럼 교과세부능력 및 특기사항을 작성해 주세요. 사용자가 학생별 원본 자료를 보내면 아래 원칙에 따라 완성도 높은 최종 문장을 작성하세요.
+
+${buildWritingGuide()}
 
 # 매번의 출력 방식
-사용자가 세특 초안을 보내면 설명, 제목, 수정 이유, 따옴표 없이 다듬어진 최종 세특 한 문단만 출력하세요. 답변 전에 사실 추가 여부, 학생 간 정보 혼합, 금지 주어, 관찰 불가능한 표현, 종결 어미, 성취기준 노출, 문장 중복을 내부적으로 점검하세요.`;
+사용자가 학생별 원본 자료를 보내면 설명, 제목, 수정 이유, 따옴표 없이 완성된 최종 세특 한 문단만 출력하세요. 답변 전에 사실 추가 여부, 학생 간 정보 혼합, 금지 주어, 관찰 불가능한 표현, 종결 어미, 성취기준 노출, 문장 중복을 내부적으로 점검하세요.`;
 }
 
 function buildAssessmentPrompt() {
@@ -690,18 +1007,20 @@ function buildAssessmentPrompt() {
 - 과목: ${item.subject}
 - 수행평가명: ${item.name}
 - 수행평가 활동: ${item.activity}
+- 학생별 필수 작성 항목: 학생 관찰 근거(학생 활동 내용)
+- 학생별 선택 작성 항목: ${item.optionalFields.map(field => field.label).join(', ') || '없음'}
 
 # 성취기준 — 해석을 위한 내부 참고용
 ${standards || '등록된 성취기준 없음'}
 
 # 수행평가별 적용 원칙
-1. 이후 전달되는 모든 초안은 위 수행평가에 참여한 서로 다른 학생의 기록입니다.
-2. 수행평가 활동과 성취기준은 초안의 관찰 행동을 해석하는 데만 활용하고, 초안에 없는 구체적 행동이나 성과를 추측하여 추가하지 마세요.
+1. 이후 전달되는 모든 원본 자료는 위 수행평가에 참여한 서로 다른 학생의 기록입니다.
+2. 수행평가 활동과 성취기준은 원본 자료의 관찰 행동을 해석하는 배경으로만 활용하고, 수행평가 설명 전체를 최종 문장에 옮기지 마세요.
 3. 최종 문장에는 성취기준 코드, 원문, ‘성취기준에 따르면’과 같은 표현을 절대 노출하지 마세요.
-4. 수행평가 활동 설명을 그대로 반복하지 말고 각 초안에 기록된 실제 수행 행동과 자연스럽게 결합하세요.
+4. 학생별 원본 자료가 길면 핵심 행동 중심으로 요약하고, 짧으면 입력된 사실의 범위 안에서 과정과 의미를 구체화하세요. 원본에 없는 행동이나 성과는 추가하지 마세요.
 5. 다른 수행평가로 넘어갈 때는 새 대화방에서 해당 평가의 전용 프롬프트를 다시 입력해야 합니다.
 
-위 지침과 수행평가 맥락을 이해했다면 지금은 “준비되었습니다. 이 수행평가의 학생별 세특 초안을 보내주세요.”라고만 답하세요.`;
+위 지침과 수행평가 맥락을 이해했다면 지금은 “준비되었습니다. 이 수행평가의 학생별 원본 자료를 보내주세요.”라고만 답하세요.`;
 }
 
 $('#copyAssessmentPrompt').addEventListener('click', async () => {
@@ -711,9 +1030,619 @@ $('#copyAssessmentPrompt').addEventListener('click', async () => {
   showToast('수행평가별 프롬프트를 복사했습니다. 새 AI 대화방에 붙여넣으세요.');
 });
 
+$('#copyStudentData').addEventListener('click', async () => {
+  if (!$('#assessmentSelect').value) return showToast('수행평가를 먼저 선택해 주세요.');
+  if (!$('#studentEvidence').value.trim()) return showToast('학생 관찰 근거를 입력해 주세요.');
+  const prompt = buildStudentDataPrompt();
+  await copyText(prompt);
+  showToast('AI용 학생 원본 자료를 복사했습니다. 같은 AI 대화방에 붙여넣으세요.');
+});
+
 $('#copyResult').addEventListener('click', async () => {
   await copyText($('#result').value);
-  showToast('학생별 초안을 복사했습니다. 같은 AI 대화방에 붙여넣으세요.');
+  showToast('오프라인 보조 초안을 복사했습니다.');
+});
+
+function loadBatchDrafts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(BATCH_STORAGE_KEY));
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBatchDrafts() {
+  try {
+    localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batchDrafts));
+  } catch {
+    showToast('학급 입력 내용을 저장할 공간이 부족합니다.');
+  }
+}
+
+function createBatchRow(index = 0) {
+  return {
+    id: makeId(),
+    localLabel: String(index + 1),
+    evidence: '',
+    optional: {},
+    achievement: '',
+    competencies: ''
+  };
+}
+
+function normalizeBatchRow(row, index) {
+  const savedLabel = typeof row?.localLabel === 'string' ? row.localLabel.trim() : '';
+  const legacyNumber = savedLabel.match(/^학생\s*(\d+)$/u)?.[1];
+  return {
+    id: typeof row?.id === 'string' && row.id ? row.id : makeId(),
+    localLabel: legacyNumber || savedLabel || String(index + 1),
+    evidence: typeof row?.evidence === 'string' ? row.evidence : '',
+    optional: row?.optional && typeof row.optional === 'object' && !Array.isArray(row.optional) ? row.optional : {},
+    achievement: ['excellent', 'good', 'steady', 'growth'].includes(row?.achievement) ? row.achievement : '',
+    competencies: normalizeBatchCompetencies(row?.competencies)
+  };
+}
+
+function getBatchDraft(item) {
+  const saved = batchDrafts[item.id];
+  if (!saved || typeof saved !== 'object') {
+    batchDrafts[item.id] = {
+      length: 'medium',
+      styleReference: '',
+      rows: Array.from({ length: 5 }, (_, index) => createBatchRow(index))
+    };
+    saveBatchDrafts();
+  } else {
+    saved.length = ['short', 'medium', 'long'].includes(saved.length) ? saved.length : 'medium';
+    saved.styleReference = typeof saved.styleReference === 'string' ? saved.styleReference : '';
+    saved.rows = Array.isArray(saved.rows) && saved.rows.length
+      ? saved.rows.map(normalizeBatchRow)
+      : Array.from({ length: 5 }, (_, index) => createBatchRow(index));
+  }
+  return batchDrafts[item.id];
+}
+
+function renderBatchAssessmentSelect(selectedId = '') {
+  const select = $('#batchAssessmentSelect');
+  const previous = selectedId || select.value;
+  select.replaceChildren(new Option('등록한 수행평가를 선택하세요', ''));
+  assessments.forEach(item => select.add(new Option(`[${item.subject}] ${item.name}`, item.id)));
+  if (assessments.some(item => item.id === previous)) select.value = previous;
+  renderBatchAssessment();
+}
+
+function renderBatchAssessment() {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  const box = $('#batchSelectedAssessment');
+  const editor = $('#batchEditorArea');
+  box.replaceChildren();
+  box.classList.toggle('hidden', !item);
+  editor.classList.toggle('hidden', !item);
+  resetBatchOffline();
+  if (!item) return;
+
+  const title = document.createElement('strong');
+  title.textContent = `${item.subject} · ${item.name}`;
+  const description = document.createElement('p');
+  description.textContent = `학생별 작성 항목 ${1 + item.optionalFields.length}개 · 5명 단위 프롬프트`;
+  box.append(title, description);
+
+  const draft = getBatchDraft(item);
+  $('#batchLength').value = draft.length;
+  $('#batchStyleReference').value = draft.styleReference;
+  updateBatchPasteGuide(item);
+  renderBatchTable(item, draft);
+  renderBatchChunks(item, draft);
+  updateStyleLockStatus(draft);
+}
+
+function updateBatchPasteGuide(item) {
+  const columns = getBatchColumnLabels(item);
+  $('#batchPasteGuide').textContent = `열 순서: ${columns.join(' → ')}`;
+  $('#batchPasteInput').placeholder = `${columns.join('\t')}\n엑셀에서 여러 행을 복사한 뒤 여기에 붙여넣으세요.`;
+}
+
+function getBatchColumnLabels(item) {
+  return ['번호 / 구분(수정 가능)', '학생 관찰 근거', ...item.optionalFields.map(field => field.label), '성취 수준', '강조할 수학 역량(선택)'];
+}
+
+function normalizeBatchCompetencies(value) {
+  const source = String(value ?? '').toLowerCase();
+  return BATCH_COMPETENCIES
+    .filter(competency => competency.matches.some(match => source.includes(match)))
+    .map(competency => competency.label)
+    .join(', ');
+}
+
+function escapeXml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[character]));
+}
+
+function excelColumnName(index) {
+  let name = '';
+  for (let value = index + 1; value; value = Math.floor((value - 1) / 26)) name = String.fromCharCode(65 + ((value - 1) % 26)) + name;
+  return name;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function makeZip(files) {
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const write16 = (view, at, value) => view.setUint16(at, value, true);
+  const write32 = (view, at, value) => view.setUint32(at, value >>> 0, true);
+
+  Object.entries(files).forEach(([name, content]) => {
+    const nameBytes = encoder.encode(name);
+    const data = typeof content === 'string' ? encoder.encode(content) : content;
+    const checksum = crc32(data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(local.buffer);
+    write32(localView, 0, 0x04034b50); write16(localView, 4, 20); write16(localView, 6, 0x0800); write16(localView, 8, 0);
+    write32(localView, 14, checksum); write32(localView, 18, data.length); write32(localView, 22, data.length); write16(localView, 26, nameBytes.length);
+    local.set(nameBytes, 30);
+    localParts.push(local, data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    const centralView = new DataView(central.buffer);
+    write32(centralView, 0, 0x02014b50); write16(centralView, 4, 20); write16(centralView, 6, 20); write16(centralView, 8, 0x0800); write16(centralView, 10, 0);
+    write32(centralView, 16, checksum); write32(centralView, 20, data.length); write32(centralView, 24, data.length); write16(centralView, 28, nameBytes.length); write32(centralView, 42, offset);
+    central.set(nameBytes, 46);
+    centralParts.push(central);
+    offset += local.length + data.length;
+  });
+
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = new Uint8Array(22);
+  const endView = new DataView(end.buffer);
+  write32(endView, 0, 0x06054b50); write16(endView, 8, centralParts.length); write16(endView, 10, centralParts.length);
+  write32(endView, 12, centralSize); write32(endView, 16, offset);
+  return new Blob([...localParts, ...centralParts, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function buildBatchWorkbook(item) {
+  const columns = getBatchColumnLabels(item);
+  const lastColumn = excelColumnName(columns.length - 1);
+  const widths = columns.map((_, index) => index === 1 ? 45 : index === 0 ? 14 : index === columns.length - 1 ? 24 : 22);
+  const cell = (reference, value, style = 0) => `<c r="${reference}" t="inlineStr"${style ? ` s="${style}"` : ''}><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
+  const headerCells = columns.map((label, index) => cell(`${excelColumnName(index)}4`, label, 2)).join('');
+  const blankRows = Array.from({ length: 40 }, (_, rowIndex) => {
+    const rowNumber = rowIndex + 5;
+    return `<row r="${rowNumber}" ht="42" customHeight="1">${columns.map((_, columnIndex) => cell(`${excelColumnName(columnIndex)}${rowNumber}`, columnIndex === 0 && rowIndex < 5 ? rowIndex + 1 : '', 3)).join('')}</row>`;
+  }).join('');
+  const achievementColumn = excelColumnName(columns.length - 2);
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}44"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols><sheetData><row r="1" ht="28" customHeight="1">${cell('A1', `${item.subject} · ${item.name} 학급 입력 양식`, 1)}</row><row r="2" ht="30" customHeight="1">${cell('A2', '5행부터 작성하세요. 성취 수준은 목록에서 선택합니다. 강조 역량은 비워 두고 업로드 후 화면에서 선택해도 됩니다.', 4)}</row><row r="4" ht="24" customHeight="1">${headerCells}</row>${blankRows}</sheetData><autoFilter ref="A4:${lastColumn}44"/><mergeCells count="2"><mergeCell ref="A1:${lastColumn}1"/><mergeCell ref="A2:${lastColumn}2"/></mergeCells><dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="${achievementColumn}5:${achievementColumn}44"><formula1>"매우 우수,우수,보통,성장 중"</formula1></dataValidation></dataValidations></worksheet>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="15"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF246F4F"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF3EE"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFD9E4DC"/></left><right style="thin"><color rgb="FFD9E4DC"/></right><top style="thin"><color rgb="FFD9E4DC"/></top><bottom style="thin"><color rgb="FFD9E4DC"/></bottom></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  return makeZip({
+    '[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+    '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="학생 수행 정보" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    'xl/styles.xml': styles,
+    'xl/worksheets/sheet1.xml': sheet
+  });
+}
+
+function downloadBatchTemplate() {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+  const blob = buildBatchWorkbook(item);
+  const link = document.createElement('a');
+  const safeName = item.name.replace(/[\\/:*?"<>|]/g, '').slice(0, 40) || '수행평가';
+  link.href = URL.createObjectURL(blob);
+  link.download = `${safeName}_학급입력양식.xlsx`;
+  const downloadUrl = link.href;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+  showToast('이 수행평가에 맞춘 엑셀 양식을 만들었습니다.');
+}
+
+async function unzipWorkbook(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  let endOffset = -1;
+  for (let index = bytes.length - 22; index >= Math.max(0, bytes.length - 65557); index -= 1) {
+    if (view.getUint32(index, true) === 0x06054b50) { endOffset = index; break; }
+  }
+  if (endOffset < 0) throw new Error('zip-end');
+  const entries = {};
+  const count = view.getUint16(endOffset + 10, true);
+  let offset = view.getUint32(endOffset + 16, true);
+  const decoder = new TextDecoder();
+  for (let index = 0; index < count; index += 1) {
+    if (view.getUint32(offset, true) !== 0x02014b50) throw new Error('zip-central');
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + nameLength));
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+    if (method === 0) entries[name] = compressed;
+    else if (method === 8) {
+      const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      entries[name] = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function workbookRowsFromXml(entries) {
+  const decoder = new TextDecoder();
+  const sheetBytes = entries['xl/worksheets/sheet1.xml'];
+  if (!sheetBytes) throw new Error('sheet-missing');
+  const parse = text => new DOMParser().parseFromString(text, 'application/xml');
+  const sheet = parse(decoder.decode(sheetBytes));
+  if (sheet.querySelector('parsererror')) throw new Error('sheet-xml');
+  const shared = entries['xl/sharedStrings.xml']
+    ? [...parse(decoder.decode(entries['xl/sharedStrings.xml'])).querySelectorAll('si')].map(node => node.textContent || '')
+    : [];
+  const rows = [...sheet.querySelectorAll('sheetData > row')].map(row => {
+    const values = [];
+    row.querySelectorAll('c').forEach(cell => {
+      const reference = cell.getAttribute('r') || 'A1';
+      const letters = reference.match(/[A-Z]+/i)?.[0]?.toUpperCase() || 'A';
+      let column = 0;
+      for (const letter of letters) column = column * 26 + letter.charCodeAt(0) - 64;
+      const type = cell.getAttribute('t');
+      const raw = type === 'inlineStr' ? (cell.querySelector('is')?.textContent || '') : (cell.querySelector('v')?.textContent || '');
+      values[column - 1] = type === 's' ? (shared[Number(raw)] || '') : raw;
+    });
+    return values.map(value => String(value ?? '').trim());
+  });
+  const headerIndex = rows.findIndex(row => row.some(value => /학생\s*관찰\s*근거/u.test(value)));
+  if (headerIndex < 0) throw new Error('header-missing');
+  return rows.slice(headerIndex + 1).filter(row => row.some(value => value.trim())).slice(0, 40);
+}
+
+function createBatchTextControl(value, placeholder, onInput, multiline = true) {
+  const control = multiline ? document.createElement('textarea') : document.createElement('input');
+  control.value = value;
+  control.placeholder = placeholder;
+  if (multiline) control.rows = 3;
+  control.addEventListener('input', event => onInput(event.target.value));
+  return control;
+}
+
+function renderBatchTable(item, draft) {
+  const container = $('#batchTableContainer');
+  const table = document.createElement('table');
+  table.className = 'batch-table';
+  const head = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['번호 / 구분(수정 가능)', '학생 관찰 근거(필수)', ...item.optionalFields.map(field => field.label), '성취 수준', '강조 역량(선택)', '삭제'].forEach(label => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.append(th);
+  });
+  head.append(headRow);
+  table.append(head);
+
+  const body = document.createElement('tbody');
+  draft.rows.forEach((row, rowIndex) => {
+    const tr = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.className = 'batch-label-cell';
+    const labelInput = createBatchTextControl(row.localLabel, '번호 또는 구분', value => {
+      row.localLabel = value;
+      saveBatchDrafts();
+    }, false);
+    labelCell.append(labelInput);
+    tr.append(labelCell);
+
+    const evidenceCell = document.createElement('td');
+    evidenceCell.className = 'evidence-cell';
+    evidenceCell.append(createBatchTextControl(row.evidence, '학생이 실제로 보인 활동을 입력하세요.', value => {
+      row.evidence = value;
+      saveBatchDrafts();
+      renderBatchChunks(item, draft);
+    }));
+    tr.append(evidenceCell);
+
+    item.optionalFields.forEach(field => {
+      const td = document.createElement('td');
+      td.append(createBatchTextControl(row.optional[field.id] || '', field.label, value => {
+        row.optional[field.id] = value;
+        saveBatchDrafts();
+        renderBatchChunks(item, draft);
+      }));
+      tr.append(td);
+    });
+
+    const achievementCell = document.createElement('td');
+    const achievement = document.createElement('select');
+    [['', '선택 안 함'], ['excellent', '매우 우수'], ['good', '우수'], ['steady', '보통'], ['growth', '성장 중']].forEach(([value, label]) => achievement.add(new Option(label, value)));
+    achievement.value = row.achievement;
+    achievement.addEventListener('change', event => {
+      row.achievement = event.target.value;
+      saveBatchDrafts();
+      renderBatchChunks(item, draft);
+    });
+    achievementCell.append(achievement);
+    tr.append(achievementCell);
+
+    const competencyCell = document.createElement('td');
+    const competencyPicker = document.createElement('div');
+    competencyPicker.className = 'batch-competency-picker';
+    const selectedCompetencies = new Set(normalizeBatchCompetencies(row.competencies).split(', ').filter(Boolean));
+    BATCH_COMPETENCIES.forEach(competency => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      const text = document.createElement('span');
+      input.type = 'checkbox';
+      input.value = competency.label;
+      input.checked = selectedCompetencies.has(competency.label);
+      text.textContent = competency.label.replace(' 역량', '');
+      input.addEventListener('change', () => {
+        row.competencies = [...competencyPicker.querySelectorAll('input:checked')].map(control => control.value).join(', ');
+        saveBatchDrafts();
+        renderBatchChunks(item, draft);
+      });
+      label.append(input, text);
+      competencyPicker.append(label);
+    });
+    competencyCell.append(competencyPicker);
+    tr.append(competencyCell);
+
+    const deleteCell = document.createElement('td');
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'batch-delete-row';
+    remove.title = '이 학생 행 삭제';
+    remove.setAttribute('aria-label', `${rowIndex + 1}번째 학생 행 삭제`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      if (row.evidence.trim() && !confirm(`${row.localLabel || rowIndex + 1} 학생의 입력 내용을 삭제할까요?`)) return;
+      draft.rows.splice(rowIndex, 1);
+      if (!draft.rows.length) draft.rows.push(createBatchRow(0));
+      saveBatchDrafts();
+      renderBatchTable(item, draft);
+      renderBatchChunks(item, draft);
+    });
+    deleteCell.append(remove);
+    tr.append(deleteCell);
+    body.append(tr);
+  });
+  table.append(body);
+  container.replaceChildren(table);
+}
+
+function achievementFromText(text) {
+  const value = clean(text || '');
+  const map = { '매우 우수': 'excellent', '우수': 'good', '보통': 'steady', '성장 중': 'growth', excellent: 'excellent', good: 'good', steady: 'steady', growth: 'growth' };
+  return map[value] || '';
+}
+
+function applyBatchPaste() {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  const raw = $('#batchPasteInput').value.trim();
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+  if (!raw) return showToast('엑셀에서 복사한 내용을 붙여넣어 주세요.');
+  const lines = raw.split(/\r?\n/).filter(line => line.trim());
+  let rows = lines.map(line => line.split('\t'));
+  if (/교사용|번호|관찰\s*근거/u.test(rows[0]?.join(' ') || '')) rows = rows.slice(1);
+  if (replaceBatchRows(item, rows, '붙여넣은 표')) $('#batchPasteInput').value = '';
+}
+
+function replaceBatchRows(item, rows, sourceName) {
+  if (!rows.length) { showToast('반영할 학생 자료가 없습니다.'); return false; }
+  const draft = getBatchDraft(item);
+  if (draft.rows.some(row => row.evidence.trim()) && !confirm('현재 학급 입력 내용을 새로 불러온 자료로 바꿀까요?')) return false;
+
+  draft.rows = rows.map((cells, index) => {
+    const singleColumn = cells.length === 1;
+    const row = createBatchRow(index);
+    row.localLabel = singleColumn ? String(index + 1) : (cells[0]?.trim() || String(index + 1));
+    row.evidence = (singleColumn ? cells[0] : cells[1])?.trim() || '';
+    const optionalStart = singleColumn ? 1 : 2;
+    item.optionalFields.forEach((field, fieldIndex) => { row.optional[field.id] = cells[optionalStart + fieldIndex]?.trim() || ''; });
+    row.achievement = achievementFromText(cells[optionalStart + item.optionalFields.length] || '');
+    row.competencies = normalizeBatchCompetencies(cells[optionalStart + item.optionalFields.length + 1]);
+    return row;
+  });
+  saveBatchDrafts();
+  renderBatchTable(item, draft);
+  renderBatchChunks(item, draft);
+  const tablePanel = $('.batch-direct-panel');
+  tablePanel.classList.remove('batch-data-updated');
+  requestAnimationFrame(() => tablePanel.classList.add('batch-data-updated'));
+  tablePanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showToast(`${sourceName}에서 ${draft.rows.length}명의 자료를 반영했습니다.`);
+  return true;
+}
+
+async function importBatchWorkbook(file) {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+  if (!file) return;
+  if (!/\.xlsx$/i.test(file.name)) return showToast('.xlsx 형식의 엑셀 파일을 선택해 주세요.');
+  if (file.size > 5 * 1024 * 1024) return showToast('엑셀 파일은 5MB 이하만 불러올 수 있습니다.');
+  try {
+    const entries = await unzipWorkbook(await file.arrayBuffer());
+    const rows = workbookRowsFromXml(entries);
+    replaceBatchRows(item, rows, '엑셀 파일');
+  } catch {
+    showToast('양식의 열 제목을 확인하거나 새 양식을 다시 받아 주세요.');
+  } finally {
+    $('#batchWorkbookInput').value = '';
+  }
+}
+
+function getFilledBatchRows(draft) {
+  return draft.rows.map((row, index) => ({ row, studentNumber: index + 1 })).filter(entry => entry.row.evidence.trim());
+}
+
+function resetBatchOffline() {
+  $('#batchOfflineResult').value = '';
+  $('#batchOfflineResult').dataset.students = '0';
+  $('#batchOfflineResultArea').classList.add('hidden');
+  $('#batchOfflineEmpty').classList.remove('hidden');
+  updateBatchOfflineCount();
+}
+
+function updateBatchOfflineCount() {
+  const result = $('#batchOfflineResult');
+  const students = Number(result.dataset.students || 0);
+  const text = result.value;
+  $('#batchOfflineCount').textContent = `${students}명 · ${text.length}자 · ${new TextEncoder().encode(text).length}바이트`;
+}
+
+function generateBatchOfflineDrafts() {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+  const draft = getBatchDraft(item);
+  const entries = getFilledBatchRows(draft);
+  if (!entries.length) return showToast('학생 관찰 근거를 한 명 이상 입력해 주세요.');
+  const previousVariant = variant;
+  const records = entries.map(({ row, studentNumber }, index) => {
+    variant = index;
+    const fieldEntries = item.optionalFields.map(field => ({
+      ...field,
+      value: String(row.optional[field.id] || '').trim()
+    }));
+    const competencies = BATCH_COMPETENCIES
+      .filter(competency => row.competencies.includes(competency.label))
+      .map(competency => competency.key);
+    const record = composeOfflineRecord({
+      item,
+      evidence: row.evidence.trim(),
+      fieldEntries,
+      competencies,
+      achievement: row.achievement,
+      length: draft.length
+    });
+    const label = row.localLabel.trim() || `학생 ${String(studentNumber).padStart(2, '0')}`;
+    return `[${label}]\n${record}`;
+  });
+  variant = previousVariant;
+  const result = $('#batchOfflineResult');
+  result.value = records.join('\n\n');
+  result.dataset.students = String(entries.length);
+  $('#batchOfflineEmpty').classList.add('hidden');
+  $('#batchOfflineResultArea').classList.remove('hidden');
+  updateBatchOfflineCount();
+  showToast(`${entries.length}명의 오프라인 보조 초안을 만들었습니다.`);
+}
+
+function buildBatchPrompt(item, entries, draft) {
+  const achievementNames = { excellent: '매우 우수', good: '우수', steady: '보통', growth: '성장 중' };
+  const lengthNames = { short: '약 250~350자', medium: '약 400~550자', long: '약 600자 이상' };
+  const standards = item.standards.map(code => {
+    const standard = ACHIEVEMENT_STANDARDS[item.subject]?.find(entry => entry.code === code);
+    return standard ? `[${standard.code}] ${standard.text}` : '';
+  }).filter(Boolean).join('\n');
+  const studentBlocks = entries.map(({ row, studentNumber }) => {
+    const optionalLines = item.optionalFields
+      .filter(field => (row.optional[field.id] || '').trim())
+      .map(field => `- ${field.label}: ${row.optional[field.id].trim()}`)
+      .join('\n');
+    return `## 학생 ${String(studentNumber).padStart(2, '0')}\n- 학생 관찰 근거(학생 활동 내용): ${row.evidence.trim()}\n${optionalLines ? `${optionalLines}\n` : ''}- 성취 수준: ${achievementNames[row.achievement] || '선택하지 않음'}\n- 강조할 수학 역량: ${row.competencies.trim() || '선택하지 않음'}\n- 희망 분량: ${lengthNames[draft.length]}`;
+  }).join('\n\n');
+  const outputLabels = entries.map(({ studentNumber }) => `[학생 ${String(studentNumber).padStart(2, '0')}]\n(완성된 세특 한 문단)`).join('\n\n');
+  const styleReference = draft.styleReference.trim()
+    ? `# 문체 기준 잠금\n아래 문장은 문장 길이, 어조, 구성만 참고하는 예시입니다. 예시 속 학생의 행동·성과·주제·수치 등 내용은 이번 학생들에게 절대 옮기지 마세요.\n\n${draft.styleReference.trim()}\n`
+    : `# 문체 기준 잠금\n모든 학생에게 품격 있는 교사 관찰 문체, 현재형 명사형 종결(~함·~음·~임), 비슷한 문장 밀도와 완성도를 일관되게 적용하세요.\n`;
+
+  return `# 역할\n한국 고등학교에서 30년간 근무한 베테랑 수학교사처럼 아래 학생별 원본 자료를 바탕으로 교과세부능력 및 특기사항을 작성하세요.\n\n# 수행평가 공통 정보\n- 과목: ${item.subject}\n- 수행평가명: ${item.name}\n- 수행평가 활동: ${item.activity}\n\n# 성취기준 — 내부 참고용\n${standards || '등록된 성취기준 없음'}\n\n${buildWritingGuide()}\n\n${styleReference}\n# 학급 일괄 작성 추가 규칙\n1. 각 학생을 서로 완전히 독립된 기록으로 처리하고 다른 학생의 행동·평가·주제를 섞지 마세요.\n2. 앞 학생과 뒤 학생의 글자 수, 문장 밀도, 문체 완성도를 같은 기준으로 유지하세요. 뒤쪽 학생을 더 짧게 쓰거나 형식을 생략하지 마세요.\n3. 문체 기준 예시는 문장 길이·어조·구성만 참고하고, 예시 속 학생의 행동·성과·주제·수치 등 내용은 옮기지 마세요.\n4. 설명, 제목, 작성 이유 없이 학생별 완성 문단만 출력하세요.\n\n# 학생별 원본 자료\n${studentBlocks}\n\n# 출력 형식\n아래 번호와 순서를 정확히 지키고 모든 학생을 빠짐없이 출력하세요.\n\n${outputLabels}\n\n출력 전에 사실 추가 여부, 학생 간 정보 혼합, 뒤쪽 학생 분량 축소, 금지 주어, 관찰 불가능한 표현, 종결 어미, 성취기준 노출, 문체 변화, 형식 누락이 없는지 점검하세요.`;
+}
+
+function renderBatchChunks(item, draft) {
+  const container = $('#batchChunkList');
+  container.replaceChildren();
+  const filled = getFilledBatchRows(draft);
+  if (!filled.length) {
+    const empty = document.createElement('div');
+    empty.className = 'batch-chunk-empty';
+    empty.textContent = '학생 관찰 근거를 입력하면 5명 단위 복사 버튼이 만들어집니다.';
+    container.append(empty);
+    return;
+  }
+
+  for (let index = 0; index < filled.length; index += 5) {
+    const entries = filled.slice(index, index + 5);
+    const card = document.createElement('article');
+    card.className = 'batch-chunk-card';
+    const header = document.createElement('header');
+    const title = document.createElement('strong');
+    title.textContent = `학생 ${String(entries[0].studentNumber).padStart(2, '0')}~${String(entries.at(-1).studentNumber).padStart(2, '0')}`;
+    const status = document.createElement('small');
+    status.textContent = `${entries.length}명 · ${draft.styleReference.trim() ? '문체 잠금 적용' : '기본 문체'}`;
+    header.append(title, status);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'prompt-button';
+    button.innerHTML = '<span>✦</span> 새 AI 대화방용 프롬프트 복사';
+    button.addEventListener('click', async () => {
+      await copyText(buildBatchPrompt(item, entries, draft));
+      showToast(`${title.textContent} 묶음 프롬프트를 복사했습니다. 새 AI 대화방에 붙여넣으세요.`);
+    });
+    card.append(header, button);
+    container.append(card);
+  }
+}
+
+function updateStyleLockStatus(draft) {
+  $('#styleLockStatus').textContent = draft.styleReference.trim()
+    ? '문체 기준이 잠겼습니다. 모든 묶음 프롬프트에 같은 기준이 포함됩니다.'
+    : '기준 문장이 없으면 모든 묶음에 동일한 기본 문체 규칙이 적용됩니다.';
+}
+
+$('#batchAssessmentSelect').addEventListener('change', renderBatchAssessment);
+$('#batchLength').addEventListener('change', event => {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return;
+  const draft = getBatchDraft(item);
+  draft.length = event.target.value;
+  saveBatchDrafts();
+  renderBatchChunks(item, draft);
+});
+$('#batchStyleReference').addEventListener('input', event => {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return;
+  const draft = getBatchDraft(item);
+  draft.styleReference = event.target.value;
+  saveBatchDrafts();
+  updateStyleLockStatus(draft);
+  renderBatchChunks(item, draft);
+});
+$('#addBatchStudent').addEventListener('click', () => {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+  const draft = getBatchDraft(item);
+  if (draft.rows.length >= 40) return showToast('한 학급은 최대 40명까지 입력할 수 있습니다.');
+  draft.rows.push(createBatchRow(draft.rows.length));
+  saveBatchDrafts();
+  renderBatchTable(item, draft);
+  renderBatchChunks(item, draft);
+});
+$('#applyBatchPaste').addEventListener('click', applyBatchPaste);
+$('#downloadBatchTemplate').addEventListener('click', downloadBatchTemplate);
+$('#uploadBatchWorkbook').addEventListener('click', () => $('#batchWorkbookInput').click());
+$('#batchWorkbookInput').addEventListener('change', event => importBatchWorkbook(event.target.files?.[0]));
+$('#generateBatchOffline').addEventListener('click', generateBatchOfflineDrafts);
+$('#batchOfflineResult').addEventListener('input', updateBatchOfflineCount);
+$('#copyBatchOffline').addEventListener('click', async () => {
+  const text = $('#batchOfflineResult').value.trim();
+  if (!text) return showToast('먼저 오프라인 보조 초안을 만들어 주세요.');
+  await copyText(text);
+  showToast('학급 오프라인 보조 초안 전체를 복사했습니다.');
 });
 
 const helpModal = $('#helpModal');
@@ -743,4 +1672,6 @@ document.addEventListener('keydown', event => {
 
 renderAssessmentList();
 renderAssessmentSelect();
+renderBatchAssessmentSelect();
+renderOptionalFieldConfig();
 renderStandards('');
