@@ -1,5 +1,6 @@
-.batch-card { padding: 28px; }
+.batch-card { min-width: 0; padding: 28px; }
 .batch-assessment-field { max-width: 620px; }
+#batchEditorArea,.batch-method-card,.batch-direct-panel { min-width: 0; max-width: 100%; }
 
 .batch-reason-panel { margin: 20px 0; padding: 18px; border: 1px solid #d6e3da; border-radius: 16px; background: #f3f8f5; }
 .batch-reason-panel > header { display: flex; align-items: center; gap: 10px; margin-bottom: 13px; }
@@ -56,11 +57,13 @@
 .batch-bulk-picker input:focus-visible + span { outline: 2px solid #8db8a4; outline-offset: 2px; }
 .batch-bulk-actions { display: flex; gap: 6px; }
 .batch-bulk-actions button { padding: 9px 11px; font-size: 9px; white-space: nowrap; }
-.batch-table-container { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
-.batch-table { width: 100%; min-width: 980px; border-collapse: collapse; background: #fff; }
+.batch-table-container { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-gutter: stable; border: 1px solid var(--line); border-radius: 13px; -webkit-overflow-scrolling: touch; }
+.batch-table { width: 100%; min-width: 980px; border-spacing: 0; border-collapse: separate; background: #fff; }
 .batch-table th { padding: 10px 8px; border-bottom: 1px solid var(--line); color: #53645b; background: #f2f6f3; font-size: 10px; text-align: left; white-space: nowrap; }
 .batch-table td { min-width: 145px; padding: 7px; border-right: 1px solid #edf0ed; border-bottom: 1px solid #edf0ed; vertical-align: top; }
-.batch-table td:first-child { width: 64px; min-width: 64px; }
+.batch-table th:first-child,.batch-table td:first-child { position: sticky; left: 0; width: 104px; min-width: 104px; max-width: 104px; box-shadow: 5px 0 8px rgba(31,66,51,.08); }
+.batch-table th:first-child { z-index: 3; background: #eaf2ed; line-height: 1.35; white-space: normal; }
+.batch-table td:first-child { z-index: 2; background: #f7faf8; }
 .batch-table td.evidence-cell { min-width: 260px; }
 .batch-table tr:last-child td { border-bottom: 0; }
 .batch-table td:last-child,.batch-table th:last-child { width: 48px; min-width: 48px; border-right: 0; text-align: center; }
