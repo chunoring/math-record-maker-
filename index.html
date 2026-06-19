@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="guide.css" />
   <link rel="stylesheet" href="home.css?v=20260619-1" />
   <link rel="stylesheet" href="backup.css?v=20260619-3" />
-  <link rel="stylesheet" href="batch.css?v=20260619-5" />
+  <link rel="stylesheet" href="batch.css?v=20260619-6" />
 </head>
 <body>
   <main class="shell">
@@ -319,18 +319,29 @@
           <section class="batch-method-card batch-paste-panel">
             <header><span>방법 1</span><div><strong>엑셀 표 한 번에 붙여넣기</strong><p id="batchPasteGuide">안내되는 열 순서대로 엑셀 셀을 복사해 붙여넣으세요.</p></div></header>
             <div class="batch-file-actions">
-              <button type="button" id="downloadBatchTemplate" class="outline-button">↓ 이 수행평가 엑셀 양식 받기</button>
+              <button type="button" id="downloadBatchTemplate" class="outline-button">↓ 현재 내용 포함 엑셀 받기</button>
               <button type="button" id="uploadBatchWorkbook" class="outline-button">↑ 작성한 엑셀 파일 불러오기</button>
               <input type="file" id="batchWorkbookInput" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
             </div>
             <div class="batch-or"><span><strong>또는</strong><small>둘 중 하나만 선택</small></span></div>
             <textarea id="batchPasteInput" rows="5" placeholder="엑셀에서 여러 행을 복사한 뒤 여기에 붙여넣으세요."></textarea>
             <button type="button" id="applyBatchPaste" class="outline-button">붙여넣은 표 반영하기</button>
-            <small>다운로드한 .xlsx 양식은 열 제목을 바꾸지 않고 작성해 주세요. 강조 역량은 비워 두고 업로드 후 화면에서 선택해도 됩니다.</small>
+            <small>현재 학생별 수행 정보 표에 입력된 번호·관찰 근거·작성 항목·성취수준·강조 역량이 함께 저장됩니다. 열 제목은 바꾸지 말아 주세요.</small>
           </section>
 
           <section class="batch-method-card batch-direct-panel">
             <div class="batch-table-heading"><div><span>방법 2</span><strong>직접 입력하기</strong><p>엑셀을 불러오면 이 표에 반영됩니다. 빠진 내용과 성취 수준을 확인하고 강조 역량을 선택하세요.</p></div><button type="button" id="addBatchStudent" class="outline-button">＋ 학생 추가</button></div>
+            <section class="batch-bulk-competency" aria-label="강조 역량 일괄 선택">
+              <header><strong>강조 역량 일괄 선택</strong><p>여러 역량을 고른 뒤 현재 표의 모든 학생에게 한 번에 적용하세요.</p></header>
+              <div id="batchBulkCompetencies" class="batch-bulk-picker">
+                <label><input type="checkbox" value="문제해결 역량"><span>문제해결</span></label>
+                <label><input type="checkbox" value="추론 역량"><span>추론</span></label>
+                <label><input type="checkbox" value="의사소통 역량"><span>의사소통</span></label>
+                <label><input type="checkbox" value="연결 역량"><span>연결</span></label>
+                <label><input type="checkbox" value="정보처리 역량"><span>정보처리</span></label>
+              </div>
+              <div class="batch-bulk-actions"><button type="button" id="applyBulkCompetencies" class="outline-button">선택 역량 전체 적용</button><button type="button" id="clearBulkCompetencies" class="ghost-button">전체 학생 역량 해제</button></div>
+            </section>
             <div id="batchTableContainer" class="batch-table-container"></div>
           </section>
 
@@ -406,6 +417,6 @@
 
   <div id="toast" class="toast" role="status"></div>
   <script src="standards.js"></script>
-  <script src="app.js?v=20260619-17"></script>
+  <script src="app.js?v=20260619-18"></script>
 </body>
 </html>

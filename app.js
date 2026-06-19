@@ -1372,6 +1372,7 @@ function renderBatchAssessment() {
   box.classList.toggle('hidden', !item);
   editor.classList.toggle('hidden', !item);
   resetBatchOffline();
+  $$('#batchBulkCompetencies input').forEach(input => { input.checked = false; });
   if (!item) return;
 
   const title = document.createElement('strong');
@@ -1462,18 +1463,29 @@ function makeZip(files) {
   return new Blob([...localParts, ...centralParts, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
-function buildBatchWorkbook(item) {
+function buildBatchWorkbook(item, draft) {
   const columns = getBatchColumnLabels(item);
   const lastColumn = excelColumnName(columns.length - 1);
   const widths = columns.map((_, index) => index === 1 ? 45 : index === 0 ? 14 : index === columns.length - 1 ? 24 : 22);
   const cell = (reference, value, style = 0) => `<c r="${reference}" t="inlineStr"${style ? ` s="${style}"` : ''}><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
   const headerCells = columns.map((label, index) => cell(`${excelColumnName(index)}4`, label, 2)).join('');
-  const blankRows = Array.from({ length: 40 }, (_, rowIndex) => {
+  const achievementNames = { excellent: '매우 우수', good: '우수', steady: '보통', growth: '성장 중' };
+  const filledRows = Array.from({ length: 40 }, (_, rowIndex) => {
     const rowNumber = rowIndex + 5;
-    return `<row r="${rowNumber}" ht="42" customHeight="1">${columns.map((_, columnIndex) => cell(`${excelColumnName(columnIndex)}${rowNumber}`, columnIndex === 0 && rowIndex < 5 ? rowIndex + 1 : '', 3)).join('')}</row>`;
+    const row = draft.rows[rowIndex];
+    const values = row
+      ? [
+          row.localLabel,
+          row.evidence,
+          ...item.optionalFields.map(field => row.optional[field.id] || ''),
+          achievementNames[row.achievement] || '',
+          normalizeBatchCompetencies(row.competencies)
+        ]
+      : Array(columns.length).fill('');
+    return `<row r="${rowNumber}" ht="42" customHeight="1">${values.map((value, columnIndex) => cell(`${excelColumnName(columnIndex)}${rowNumber}`, value, 3)).join('')}</row>`;
   }).join('');
   const achievementColumn = excelColumnName(columns.length - 2);
-  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}44"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols><sheetData><row r="1" ht="28" customHeight="1">${cell('A1', `${item.subject} · ${item.name} 학급 입력 양식`, 1)}</row><row r="2" ht="30" customHeight="1">${cell('A2', '5행부터 작성하세요. 성취 수준은 목록에서 선택합니다. 강조 역량은 비워 두고 업로드 후 화면에서 선택해도 됩니다.', 4)}</row><row r="4" ht="24" customHeight="1">${headerCells}</row>${blankRows}</sheetData><autoFilter ref="A4:${lastColumn}44"/><mergeCells count="2"><mergeCell ref="A1:${lastColumn}1"/><mergeCell ref="A2:${lastColumn}2"/></mergeCells><dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="${achievementColumn}5:${achievementColumn}44"><formula1>"매우 우수,우수,보통,성장 중"</formula1></dataValidation></dataValidations></worksheet>`;
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}44"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols><sheetData><row r="1" ht="28" customHeight="1">${cell('A1', `${item.subject} · ${item.name} 학급 입력 자료`, 1)}</row><row r="2" ht="30" customHeight="1">${cell('A2', '현재 화면의 입력 내용을 담았습니다. 5행부터 이어서 수정할 수 있으며 열 제목은 바꾸지 마세요.', 4)}</row><row r="4" ht="24" customHeight="1">${headerCells}</row>${filledRows}</sheetData><autoFilter ref="A4:${lastColumn}44"/><mergeCells count="2"><mergeCell ref="A1:${lastColumn}1"/><mergeCell ref="A2:${lastColumn}2"/></mergeCells><dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="${achievementColumn}5:${achievementColumn}44"><formula1>"매우 우수,우수,보통,성장 중"</formula1></dataValidation></dataValidations></worksheet>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="15"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF246F4F"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF3EE"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFD9E4DC"/></left><right style="thin"><color rgb="FFD9E4DC"/></right><top style="thin"><color rgb="FFD9E4DC"/></top><bottom style="thin"><color rgb="FFD9E4DC"/></bottom></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
   return makeZip({
     '[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
@@ -1488,17 +1500,18 @@ function buildBatchWorkbook(item) {
 function downloadBatchTemplate() {
   const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
   if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
-  const blob = buildBatchWorkbook(item);
+  const draft = getBatchDraft(item);
+  const blob = buildBatchWorkbook(item, draft);
   const link = document.createElement('a');
   const safeName = item.name.replace(/[\\/:*?"<>|]/g, '').slice(0, 40) || '수행평가';
   link.href = URL.createObjectURL(blob);
-  link.download = `${safeName}_학급입력양식.xlsx`;
+  link.download = `${safeName}_학급입력자료.xlsx`;
   const downloadUrl = link.href;
   document.body.append(link);
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
-  showToast('이 수행평가에 맞춘 엑셀 양식을 만들었습니다.');
+  showToast('현재 학급 입력 내용을 포함한 엑셀 파일을 만들었습니다.');
 }
 
 async function unzipWorkbook(buffer) {
@@ -1674,6 +1687,30 @@ function renderBatchTable(item, draft) {
   });
   table.append(body);
   container.replaceChildren(table);
+}
+
+function setBatchCompetenciesForAll(clear = false) {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+
+  const selected = clear
+    ? []
+    : $$('#batchBulkCompetencies input:checked').map(input => input.value);
+  if (!clear && !selected.length) return showToast('전체 적용할 강조 역량을 하나 이상 선택해 주세요.');
+
+  const draft = getBatchDraft(item);
+  const competencies = selected.join(', ');
+  draft.rows.forEach(row => { row.competencies = competencies; });
+  saveBatchDrafts();
+  renderBatchTable(item, draft);
+  renderBatchChunks(item, draft);
+
+  if (clear) {
+    $$('#batchBulkCompetencies input').forEach(input => { input.checked = false; });
+    showToast('모든 학생의 강조 역량을 해제했습니다.');
+    return;
+  }
+  showToast(`선택한 ${selected.length}개 역량을 현재 표의 ${draft.rows.length}명에게 적용했습니다.`);
 }
 
 function achievementFromText(text) {
@@ -1886,6 +1923,8 @@ $('#addBatchStudent').addEventListener('click', () => {
   renderBatchChunks(item, draft);
 });
 $('#applyBatchPaste').addEventListener('click', applyBatchPaste);
+$('#applyBulkCompetencies')?.addEventListener('click', () => setBatchCompetenciesForAll(false));
+$('#clearBulkCompetencies')?.addEventListener('click', () => setBatchCompetenciesForAll(true));
 $('#downloadBatchTemplate').addEventListener('click', downloadBatchTemplate);
 $('#uploadBatchWorkbook').addEventListener('click', () => $('#batchWorkbookInput').click());
 $('#batchWorkbookInput').addEventListener('change', event => importBatchWorkbook(event.target.files?.[0]));

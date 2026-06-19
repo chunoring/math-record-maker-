@@ -45,6 +45,17 @@
 .batch-table-heading > div > p { grid-column: 2; }
 .batch-table-heading strong,.batch-chunks-heading strong,.style-lock-heading strong { font-size: 14px; }
 .batch-table-heading p,.batch-chunks-heading p,.style-lock-heading p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.batch-bulk-competency { display: grid; grid-template-columns: minmax(180px,.7fr) 1.2fr auto; gap: 12px; align-items: center; margin: 0 0 12px; padding: 12px 13px; border: 1px solid #dce6df; border-radius: 12px; background: #f5f9f6; }
+.batch-bulk-competency header strong { display: block; color: var(--green); font-size: 11px; }
+.batch-bulk-competency header p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.batch-bulk-picker { display: flex; flex-wrap: wrap; gap: 5px; }
+.batch-bulk-picker label { cursor: pointer; }
+.batch-bulk-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.batch-bulk-picker span { display: block; padding: 6px 9px; border: 1px solid #d5e1da; border-radius: 999px; color: #65736b; background: #fff; font-size: 9px; white-space: nowrap; }
+.batch-bulk-picker input:checked + span { border-color: var(--green); color: #fff; background: var(--green); font-weight: 800; }
+.batch-bulk-picker input:focus-visible + span { outline: 2px solid #8db8a4; outline-offset: 2px; }
+.batch-bulk-actions { display: flex; gap: 6px; }
+.batch-bulk-actions button { padding: 9px 11px; font-size: 9px; white-space: nowrap; }
 .batch-table-container { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
 .batch-table { width: 100%; min-width: 980px; border-collapse: collapse; background: #fff; }
 .batch-table th { padding: 10px 8px; border-bottom: 1px solid var(--line); color: #53645b; background: #f2f6f3; font-size: 10px; text-align: left; white-space: nowrap; }
@@ -105,6 +116,7 @@
 
 @media(max-width:850px){
   .batch-reason-panel > div,.batch-settings,.batch-chunk-list { grid-template-columns: 1fr; }
+  .batch-bulk-competency { grid-template-columns: 1fr; }
 }
 @media(max-width:560px){
   .batch-card { padding: 20px; }
@@ -113,6 +125,8 @@
   .batch-paste-panel textarea { grid-column: 1; }
   .batch-paste-panel > button,.batch-file-actions button { width: 100%; }
   .batch-file-actions { display: grid; }
+  .batch-bulk-actions { display: grid; grid-template-columns: 1fr; }
+  .batch-bulk-actions button { width: 100%; }
   .batch-offline-panel > header { align-items: stretch; flex-direction: column; }
   .batch-offline-panel > header button { width: 100%; }
 }
