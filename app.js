@@ -11,11 +11,11 @@ const DEFAULT_OPTIONAL_FIELDS = [
 ];
 const OPTIONAL_FIELD_EXAMPLES = ['탐구 주제', '선택 동기', '맡은 역할', '문제 해결 과정', '활용한 수학 개념', '자료 분석 방법', '발표·산출물 특징', '피드백 반영 내용'];
 const BATCH_COMPETENCIES = [
-  { key: 'problem', label: '문제해결 역량', matches: ['문제해결', 'problem'] },
-  { key: 'reasoning', label: '추론 역량', matches: ['추론', 'reasoning'] },
-  { key: 'communication', label: '의사소통 역량', matches: ['의사소통', 'communication'] },
-  { key: 'connection', label: '연결 역량', matches: ['연결', 'connection'] },
-  { key: 'information', label: '정보처리 역량', matches: ['정보처리', 'information'] }
+  { key: 'problem', label: '문제해결 역량', matches: ['문제해결', 'problem'], description: '문제 상황의 조건과 정보를 분석하고, 수학적 개념과 원리를 활용해 해결 전략을 탐색·실행하며, 풀이 과정과 결과의 타당성을 점검하고 필요하면 전략을 수정하는 능력' },
+  { key: 'reasoning', label: '추론 역량', matches: ['추론', 'reasoning'], description: '관찰한 사실과 규칙을 바탕으로 수학적 관계를 추측하고, 개념·원리·수학적 증거를 연결해 논리적으로 정당화하며 결론의 타당성을 판단하는 능력' },
+  { key: 'communication', label: '의사소통 역량', matches: ['의사소통', 'communication'], description: '수학 용어·기호·식·표·그래프를 적절히 사용하여 아이디어와 해결 과정을 표현하고, 다른 사람의 수학적 설명을 이해하며 질문·응답·토론으로 의미를 나누는 능력' },
+  { key: 'connection', label: '연결 역량', matches: ['연결', 'connection'], description: '수학의 개념과 원리 사이의 관계를 파악하고, 이를 실생활·진로·다른 교과 및 새로운 문제 상황과 연결하여 수학의 활용 가능성을 해석하는 능력' },
+  { key: 'information', label: '정보처리 역량', matches: ['정보처리', 'information'], description: '필요한 자료와 정보를 수집·선별·분류·변환·정리하고, 공학 도구를 적절히 활용해 분석한 뒤 결과의 의미와 한계를 수학적 근거로 해석하는 능력' }
 ];
 
 const competencyText = {
@@ -1207,6 +1207,16 @@ ${optionalInputs ? `${optionalInputs}\n` : ''}- 강조할 수학 역량: ${selec
 이 대화방에 먼저 입력된 수행평가 지침과 위 원본 자료만을 근거로 최종 세특 한 문단을 작성하세요. 입력에 없는 사실은 추가하지 마세요.`;
 }
 
+function buildCompetencyGuide() {
+  const descriptions = BATCH_COMPETENCIES
+    .map(competency => `- ${competency.label}: ${competency.description}`)
+    .join('\n');
+  return `# 수학 교과 역량 해석 기준 — 내부 참고용
+${descriptions}
+
+학생 자료에서 선택된 역량의 이름을 그대로 칭찬 문구로 붙이지 마세요. 위 설명 중 학생 관찰 근거로 확인되는 구체적인 행동만 골라 수행 과정과 연결해 서술하고, 근거가 부족하면 선택된 역량도 억지로 넣지 마세요.`;
+}
+
 function buildWritingGuide() {
   return `# 가장 중요한 원칙
 1. 원본 자료의 관찰 사실을 최우선으로 보존하고, 입력에 없는 행동·성과·감정·수치·친구의 반응을 새로 만들지 마세요.
@@ -1214,6 +1224,8 @@ function buildWritingGuide() {
 3. 수행평가 설명은 배경 자료로만 사용하고 최종 문장에 전부 옮기지 마세요. 학생의 실제 활동을 이해하는 데 필요한 맥락만 짧게 반영하세요.
 4. 어색한 나열과 반복을 줄이고, 관찰 행동 → 구체적 수행 과정 → 드러난 수학 역량 또는 성장의 순서로 문장을 조직하세요.
 5. 학생 관찰 근거의 문장을 그대로 복사해 나열하지 말고, 각 행동이 수행평가의 어느 활동·과정에서 나타났는지 연결하여 자연스러운 교사 관찰 문장으로 재구성하세요.
+
+${buildCompetencyGuide()}
 
 # 문체와 표현
 1. ‘학생’, ‘그는’, ‘그가’, ‘그의’를 주어로 사용하지 마세요.
@@ -1386,6 +1398,12 @@ function renderBatchAssessment() {
   const box = $('#batchSelectedAssessment');
   const editor = $('#batchEditorArea');
   box.replaceChildren();
+  $('#batchTableContainer').replaceChildren();
+  $('#batchChunkList').replaceChildren();
+  $('#batchPasteInput').value = '';
+  $('#batchStyleReference').value = '';
+  $('#batchLength').value = 'medium';
+  editor.dataset.assessmentId = item?.id || '';
   box.classList.toggle('hidden', !item);
   editor.classList.toggle('hidden', !item);
   resetBatchOffline();
@@ -1395,7 +1413,7 @@ function renderBatchAssessment() {
   const title = document.createElement('strong');
   title.textContent = `${item.subject} · ${item.name}`;
   const description = document.createElement('p');
-  description.textContent = `학생별 작성 항목 ${1 + item.optionalFields.length}개 · 5명 단위 프롬프트`;
+  description.textContent = `학생별 작성 항목 ${1 + item.optionalFields.length}개 · 이 수행평가에 마지막으로 저장한 학급 입력을 불러왔습니다.`;
   box.append(title, description);
   $('#batchOfflineEmpty').textContent = `‘${item.evidenceLabel}’ 항목을 입력한 뒤 보조 초안을 만들 수 있습니다.`;
 
@@ -1939,6 +1957,25 @@ $('#addBatchStudent').addEventListener('click', () => {
   saveBatchDrafts();
   renderBatchTable(item, draft);
   renderBatchChunks(item, draft);
+});
+$('#clearBatchStudents').addEventListener('click', () => {
+  const item = assessments.find(assessment => assessment.id === $('#batchAssessmentSelect').value);
+  if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
+  const draft = getBatchDraft(item);
+  const confirmed = confirm(`‘${item.name}’ 수행평가의 학생 입력 내용을 모두 삭제할까요?\n\n다른 수행평가의 학급 자료와 현재 분량·문체 기준은 유지됩니다.`);
+  if (!confirmed) return;
+  const previousRows = draft.rows;
+  draft.rows = Array.from({ length: 5 }, (_, index) => createBatchRow(index));
+  if (!saveBatchDrafts()) {
+    draft.rows = previousRows;
+    return;
+  }
+  $('#batchPasteInput').value = '';
+  $$('#batchBulkCompetencies input').forEach(input => { input.checked = false; });
+  resetBatchOffline();
+  renderBatchTable(item, draft);
+  renderBatchChunks(item, draft);
+  showToast(`‘${item.name}’ 수행평가의 학급 입력 내용을 모두 삭제했습니다.`);
 });
 $('#applyBatchPaste').addEventListener('click', applyBatchPaste);
 $('#applyBulkCompetencies')?.addEventListener('click', () => setBatchCompetenciesForAll(false));
