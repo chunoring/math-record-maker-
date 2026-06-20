@@ -2,6 +2,7 @@ const STORAGE_KEY = 'math-assessments-v2';
 const BATCH_STORAGE_KEY = 'math-batch-drafts-v1';
 const RECOVERY_STORAGE_KEY = 'math-record-maker-recovery-v1';
 const MAX_RECOVERY_SNAPSHOTS = 3;
+const DEFAULT_EVIDENCE_LABEL = '학생 관찰 근거(학생 활동 내용)';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const DEFAULT_OPTIONAL_FIELDS = [
@@ -117,7 +118,7 @@ function loadAssessments() {
     saved.forEach((item, index) => {
       try {
         if (!item || typeof item !== 'object') throw new Error('invalid-item');
-        loaded.push({ ...item, promptFocus: normalizePromptFocus(item.promptFocus), optionalFields: normalizeOptionalFields(item) });
+        loaded.push({ ...item, evidenceLabel: normalizeEvidenceLabel(item.evidenceLabel), promptFocus: normalizePromptFocus(item.promptFocus), optionalFields: normalizeOptionalFields(item) });
       } catch {
         assessmentLoadIssue = `저장된 수행평가 ${index + 1}번 항목을 읽지 못했습니다.`;
       }
@@ -318,11 +319,17 @@ function normalizeImportedAssessment(item) {
     name,
     subject,
     activity,
+    evidenceLabel: normalizeEvidenceLabel(item.evidenceLabel),
     promptFocus: normalizePromptFocus(item.promptFocus),
     optionalFields: normalizeOptionalFields(item),
     standards,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString()
   };
+}
+
+function normalizeEvidenceLabel(value) {
+  const label = typeof value === 'string' ? clean(value).slice(0, 40) : '';
+  return label || DEFAULT_EVIDENCE_LABEL;
 }
 
 function defaultOptionalFields() {
@@ -567,12 +574,15 @@ $('#assessmentForm').addEventListener('submit', event => {
   if (!standards.length) return showToast('관련 성취기준을 하나 이상 선택해 주세요.');
   const optionalFields = collectOptionalFields();
   if (!optionalFields) return;
+  const evidenceLabel = normalizeEvidenceLabel($('#assessmentEvidenceLabel').value);
+  if (optionalFields.some(field => field.label === evidenceLabel)) return showToast('필수 항목과 선택 항목의 이름은 서로 다르게 입력해 주세요.');
 
   const data = {
     id: $('#editingId').value || makeId(),
     name: clean($('#assessmentName').value),
     subject: $('#assessmentSubject').value,
     activity: clean($('#assessmentActivity').value),
+    evidenceLabel,
     promptFocus: normalizePromptFocus($('#assessmentPromptFocus').value),
     optionalFields,
     standards,
@@ -600,6 +610,7 @@ function resetAssessmentForm() {
   $('#formTitle').textContent = '새 수행평가';
   $('#saveButtonText').textContent = '수행평가 등록하기';
   $('#cancelEdit').classList.add('hidden');
+  $('#assessmentEvidenceLabel').value = DEFAULT_EVIDENCE_LABEL;
   renderOptionalFieldConfig();
   renderStandards('');
 }
@@ -617,6 +628,7 @@ function editAssessment(id) {
   $('#assessmentName').value = item.name;
   $('#assessmentSubject').value = item.subject;
   $('#assessmentActivity').value = item.activity;
+  $('#assessmentEvidenceLabel').value = item.evidenceLabel;
   $('#assessmentPromptFocus').value = item.promptFocus || '';
   renderOptionalFieldConfig(item.optionalFields);
   $('#formTitle').textContent = '수행평가 수정';
@@ -697,12 +709,14 @@ function renderSelectedAssessment() {
   promptButton.disabled = !item;
   studentDataButton.disabled = !item;
   if (!item) {
+    $('#studentEvidenceLabel').textContent = DEFAULT_EVIDENCE_LABEL;
     renderStudentOptionalFields();
     return;
   }
   const title = document.createElement('strong'); title.textContent = `${item.subject} · ${item.name}`;
   const desc = document.createElement('p'); desc.textContent = `${item.activity}  |  성취기준 ${item.standards.length}개  |  작성 항목 ${1 + item.optionalFields.length}개`;
   box.append(title, desc);
+  $('#studentEvidenceLabel').textContent = item.evidenceLabel;
   renderStudentOptionalFields(item);
 }
 
@@ -1098,7 +1112,7 @@ function generateRecord() {
   const item = assessments.find(assessment => assessment.id === $('#assessmentSelect').value);
   if (!item) return showToast('등록한 수행평가를 선택해 주세요.');
   const evidence = $('#studentEvidence').value.trim();
-  if (!evidence) return showToast('학생 관찰 근거를 입력해 주세요.');
+  if (!evidence) return showToast(`‘${item.evidenceLabel}’ 항목을 입력해 주세요.`);
   const competencies = $$('#competencyChoices input:checked').map(input => input.value);
   const achievement = $('input[name="achievement"]:checked').value;
   const length = $('input[name="length"]:checked').value;
@@ -1184,7 +1198,7 @@ function buildStudentDataPrompt() {
 
   return `# 학생별 원본 자료
 - 수행평가명: ${item.name}
-- 학생 관찰 근거(학생 활동 내용): ${$('#studentEvidence').value.trim()}
+- ${item.evidenceLabel}: ${$('#studentEvidence').value.trim()}
 ${optionalInputs ? `${optionalInputs}\n` : ''}- 강조할 수학 역량: ${selectedCompetencies.join(', ') || '선택하지 않음'}
 - 성취 수준: ${achievementNames[achievement]}
 - 희망 분량: ${lengthGuide[length]}
@@ -1247,7 +1261,7 @@ function buildAssessmentPrompt() {
 - 과목: ${item.subject}
 - 수행평가명: ${item.name}
 - 수행평가 활동: ${item.activity}
-- 학생별 필수 작성 항목: 학생 관찰 근거(학생 활동 내용)
+- 학생별 필수 작성 항목: ${item.evidenceLabel}
 - 학생별 선택 작성 항목: ${item.optionalFields.map(field => field.label).join(', ') || '없음'}
 
 ${promptFocus}
@@ -1280,7 +1294,10 @@ $('#copyAssessmentPrompt').addEventListener('click', async () => {
 
 $('#copyStudentData').addEventListener('click', async () => {
   if (!$('#assessmentSelect').value) return showToast('수행평가를 먼저 선택해 주세요.');
-  if (!$('#studentEvidence').value.trim()) return showToast('학생 관찰 근거를 입력해 주세요.');
+  if (!$('#studentEvidence').value.trim()) {
+    const item = assessments.find(assessment => assessment.id === $('#assessmentSelect').value);
+    return showToast(`‘${item?.evidenceLabel || DEFAULT_EVIDENCE_LABEL}’ 항목을 입력해 주세요.`);
+  }
   const prompt = buildStudentDataPrompt();
   await copyText(prompt);
   showToast('AI용 학생 원본 자료를 복사했습니다. 같은 AI 대화방에 붙여넣으세요.');
@@ -1380,6 +1397,7 @@ function renderBatchAssessment() {
   const description = document.createElement('p');
   description.textContent = `학생별 작성 항목 ${1 + item.optionalFields.length}개 · 5명 단위 프롬프트`;
   box.append(title, description);
+  $('#batchOfflineEmpty').textContent = `‘${item.evidenceLabel}’ 항목을 입력한 뒤 보조 초안을 만들 수 있습니다.`;
 
   const draft = getBatchDraft(item);
   $('#batchLength').value = draft.length;
@@ -1397,7 +1415,7 @@ function updateBatchPasteGuide(item) {
 }
 
 function getBatchColumnLabels(item) {
-  return ['번호 / 구분(수정 가능)', '학생 관찰 근거', ...item.optionalFields.map(field => field.label), '성취 수준', '강조할 수학 역량(선택)'];
+  return ['번호 / 구분(수정 가능)', item.evidenceLabel, ...item.optionalFields.map(field => field.label), '성취 수준', '강조할 수학 역량(선택)'];
 }
 
 function normalizeBatchCompetencies(value) {
@@ -1549,7 +1567,7 @@ async function unzipWorkbook(buffer) {
   return entries;
 }
 
-function workbookRowsFromXml(entries) {
+function workbookRowsFromXml(entries, evidenceLabel = DEFAULT_EVIDENCE_LABEL) {
   const decoder = new TextDecoder();
   const sheetBytes = entries['xl/worksheets/sheet1.xml'];
   if (!sheetBytes) throw new Error('sheet-missing');
@@ -1572,7 +1590,7 @@ function workbookRowsFromXml(entries) {
     });
     return values.map(value => String(value ?? '').trim());
   });
-  const headerIndex = rows.findIndex(row => row.some(value => /학생\s*관찰\s*근거/u.test(value)));
+  const headerIndex = rows.findIndex(row => row.some(value => value === evidenceLabel || /학생\s*관찰\s*근거/u.test(value)));
   if (headerIndex < 0) throw new Error('header-missing');
   return rows.slice(headerIndex + 1).filter(row => row.some(value => value.trim())).slice(0, 40);
 }
@@ -1592,7 +1610,7 @@ function renderBatchTable(item, draft) {
   table.className = 'batch-table';
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['번호 / 구분(수정 가능)', '학생 관찰 근거(필수)', ...item.optionalFields.map(field => field.label), '성취 수준', '강조 역량(선택)', '삭제'].forEach(label => {
+  ['번호 / 구분(수정 가능)', `${item.evidenceLabel}(필수)`, ...item.optionalFields.map(field => field.label), '성취 수준', '강조 역량(선택)', '삭제'].forEach(label => {
     const th = document.createElement('th');
     th.textContent = label;
     headRow.append(th);
@@ -1614,7 +1632,7 @@ function renderBatchTable(item, draft) {
 
     const evidenceCell = document.createElement('td');
     evidenceCell.className = 'evidence-cell';
-    evidenceCell.append(createBatchTextControl(row.evidence, '학생이 실제로 보인 활동을 입력하세요.', value => {
+    evidenceCell.append(createBatchTextControl(row.evidence, `${item.evidenceLabel} 내용을 입력하세요.`, value => {
       row.evidence = value;
       saveBatchDrafts();
       renderBatchChunks(item, draft);
@@ -1765,7 +1783,7 @@ async function importBatchWorkbook(file) {
   if (file.size > 5 * 1024 * 1024) return showToast('엑셀 파일은 5MB 이하만 불러올 수 있습니다.');
   try {
     const entries = await unzipWorkbook(await file.arrayBuffer());
-    const rows = workbookRowsFromXml(entries);
+    const rows = workbookRowsFromXml(entries, item.evidenceLabel);
     replaceBatchRows(item, rows, '엑셀 파일');
   } catch {
     showToast('양식의 열 제목을 확인하거나 새 양식을 다시 받아 주세요.');
@@ -1798,7 +1816,7 @@ function generateBatchOfflineDrafts() {
   if (!item) return showToast('수행평가를 먼저 선택해 주세요.');
   const draft = getBatchDraft(item);
   const entries = getFilledBatchRows(draft);
-  if (!entries.length) return showToast('학생 관찰 근거를 한 명 이상 입력해 주세요.');
+  if (!entries.length) return showToast(`‘${item.evidenceLabel}’ 항목을 한 명 이상 입력해 주세요.`);
   const previousVariant = variant;
   const records = entries.map(({ row, studentNumber }, index) => {
     variant = index;
@@ -1842,7 +1860,7 @@ function buildBatchPrompt(item, entries, draft) {
       .filter(field => (row.optional[field.id] || '').trim())
       .map(field => `- ${field.label}: ${row.optional[field.id].trim()}`)
       .join('\n');
-    return `## 학생 ${String(studentNumber).padStart(2, '0')}\n- 학생 관찰 근거(학생 활동 내용): ${row.evidence.trim()}\n${optionalLines ? `${optionalLines}\n` : ''}- 성취 수준: ${achievementNames[row.achievement] || '선택하지 않음'}\n- 강조할 수학 역량: ${row.competencies.trim() || '선택하지 않음'}\n- 희망 분량: ${lengthNames[draft.length]}`;
+    return `## 학생 ${String(studentNumber).padStart(2, '0')}\n- ${item.evidenceLabel}: ${row.evidence.trim()}\n${optionalLines ? `${optionalLines}\n` : ''}- 성취 수준: ${achievementNames[row.achievement] || '선택하지 않음'}\n- 강조할 수학 역량: ${row.competencies.trim() || '선택하지 않음'}\n- 희망 분량: ${lengthNames[draft.length]}`;
   }).join('\n\n');
   const outputLabels = entries.map(({ studentNumber }) => `[학생 ${String(studentNumber).padStart(2, '0')}]\n(완성된 세특 한 문단)`).join('\n\n');
   const styleReferenceContent = draft.styleReference.trim()
@@ -1860,7 +1878,7 @@ function renderBatchChunks(item, draft) {
   if (!filled.length) {
     const empty = document.createElement('div');
     empty.className = 'batch-chunk-empty';
-    empty.textContent = '학생 관찰 근거를 입력하면 5명 단위 복사 버튼이 만들어집니다.';
+    empty.textContent = `‘${item.evidenceLabel}’ 항목을 입력하면 5명 단위 복사 버튼이 만들어집니다.`;
     container.append(empty);
     return;
   }
